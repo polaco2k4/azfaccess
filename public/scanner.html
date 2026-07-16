@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Scanner da Portaria — SecurePass</title>
+<link rel="stylesheet" href="/css/style.css">
+<style>
+  .cam-wrap { position: relative; border-radius: var(--radius); overflow: hidden; background: #000; aspect-ratio: 4/3; }
+  .cam-wrap video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .cam-wrap .frame {
+    position: absolute; inset: 12%; border: 3px dashed rgba(255,255,255,.55); border-radius: 16px;
+    pointer-events: none;
+  }
+  .cam-off {
+    position: absolute; inset: 0; display: flex; flex-direction: column; gap: 12px;
+    align-items: center; justify-content: center; color: var(--muted); text-align: center; padding: 20px;
+  }
+  .result {
+    border-radius: var(--radius); padding: 26px 22px; text-align: center; margin-top: 18px;
+    border: 1px solid var(--line); background: var(--panel);
+  }
+  .result.granted { background: rgba(34,197,94,.13); border-color: var(--ok); }
+  .result.denied  { background: rgba(239,68,68,.13); border-color: var(--bad); }
+  .result .icon { font-size: 3.2rem; }
+  .result h2 { font-size: 1.5rem; margin: 8px 0 4px; color: inherit; }
+  .result .holder { font-size: 1.2rem; font-weight: 700; }
+  .result .detail { color: var(--muted); margin-top: 4px; }
+  .dir-toggle { display: flex; gap: 10px; }
+  .dir-toggle button { flex: 1; font-size: 1.05rem; padding: 14px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); }
+  .dir-toggle button.on-auto { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .dir-toggle button.on-in   { background: var(--ok); color: #fff; border-color: var(--ok); }
+  .dir-toggle button.on-out  { background: var(--warn); color: #fff; border-color: var(--warn); }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="logo"><a href="/" style="color:inherit">🛡️ Secure<span>Pass</span></a> · Scanner da Portaria</div>
+  <div class="spacer"></div>
+  <div class="who">Portaria Principal</div>
+</div>
+
+<div class="wrap">
+  <div class="grid grid-2">
+    <div>
+      <div class="card">
+        <h2>Leitura de passe</h2>
+        <div class="dir-toggle" style="margin-bottom:6px">
+          <button id="dir-auto" class="on-auto">🔄 AUTOMÁTICO</button>
+          <button id="dir-in">⬇️ ENTRADA</button>
+          <button id="dir-out">⬆️ SAÍDA</button>
+        </div>
+        <p class="muted" style="margin-bottom:14px">No modo automático o mesmo QR Code serve para entrar e sair: a primeira leitura regista a entrada e a seguinte regista a saída.</p>
+        <div class="cam-wrap">
+          <video id="video" playsinline muted></video>
+          <div class="frame"></div>
+          <div class="cam-off" id="cam-off">
+            <div>📷</div>
+            <div>A câmara está desligada.</div>
+            <button id="btn-cam">Ligar câmara e ler QR</button>
+          </div>
+        </div>
+        <label class="mt">Ou cole aqui o conteúdo do QR (validação manual)</label>
+        <div class="row">
+          <input id="manual-token" placeholder="Token do passe…" style="flex:1">
+          <button id="btn-manual">Validar</button>
+        </div>
+      </div>
+
+      <div class="result" id="result" style="display:none">
+        <div class="icon" id="r-icon"></div>
+        <h2 id="r-title"></h2>
+        <div class="holder" id="r-holder"></div>
+        <div class="detail" id="r-detail"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Últimos movimentos</h2>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Hora</th><th>Portador</th><th>Mov.</th><th>Resultado</th></tr></thead>
+          <tbody id="log-body"><tr><td colspan="4" class="muted">Sem registos.</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<canvas id="canvas" style="display:none"></canvas>
+<script src="/vendor/jsqr.js"></script>
+<script src="/js/common.js"></script>
+<script>
+'use strict';
+let direction = 'auto';
+let scanning = false;
+let cooldownUntil = 0;
+
+$('#dir-auto').onclick = () => setDir('auto');
+$('#dir-in').onclick = () => setDir('in');
+$('#dir-out').onclick = () => setDir('out');
+function setDir(d) {
+  direction = d;
+  $('#dir-auto').className = d === 'auto' ? 'on-auto' : '';
+  $('#dir-in').className = d === 'in' ? 'on-in' : '';
+  $('#dir-out').className = d === 'out' ? 'on-out' : '';
+}
+
+// ------------------------- câmara + jsQR -------------------------
+$('#btn-cam').onclick = async () => {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    const video = $('#video');
+    video.srcObject = stream;
+    await video.play();
+    $('#cam-off').style.display = 'none';
+    scanning = true;
+    requestAnimationFrame(scanLoop);
+  } catch (e) {
+    alert('Não foi possível aceder à câmara: ' + e.message + '\nPode usar a validação manual em alternativa.');
+  }
+};
+
+function scanLoop() {
+  if (!scanning) return;
+  const video = $('#video');
+  if (video.readyState === video.HAVE_ENOUGH_DATA && Date.now() > cooldownUntil) {
+    const canvas = $('#canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(video, 0, 0);
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const qr = jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
+    if (qr && qr.data) {
+      cooldownUntil = Date.now() + 3000; // evita leituras duplicadas
+      validate(qr.data);
+    }
+  }
+  requestAnimationFrame(scanLoop);
+}
+
+// ------------------------- validação -------------------------
+$('#btn-manual').onclick = () => {
+  const t = $('#manual-token').value.trim();
+  if (t) validate(t);
+};
+
+async function validate(token) {
+  const box = $('#result');
+  try {
+    const r = await api('/api/scan', { method: 'POST', body: { token, direction, gate: 'Portaria Principal' } });
+    box.className = 'result granted';
+    $('#r-icon').textContent = '✅';
+    $('#r-title').textContent = r.direction === 'in' ? 'ENTRADA AUTORIZADA' : 'SAÍDA REGISTADA';
+    $('#r-holder').textContent = r.holder;
+    $('#r-detail').textContent = r.detail + (r.purpose ? ` · ${r.purpose}` : '');
+    beep(true);
+  } catch (e) {
+    box.className = 'result denied';
+    $('#r-icon').textContent = '⛔';
+    $('#r-title').textContent = 'ACESSO NEGADO';
+    $('#r-holder').textContent = '';
+    $('#r-detail').textContent = e.message;
+    beep(false);
+  }
+  box.style.display = '';
+  $('#manual-token').value = '';
+  loadLog();
+  clearTimeout(box._t);
+  box._t = setTimeout(() => { box.style.display = 'none'; }, 6000);
+}
+
+function beep(ok) {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.connect(g); g.connect(ctx.destination);
+    o.frequency.value = ok ? 880 : 220;
+    g.gain.value = 0.08;
+    o.start();
+    o.stop(ctx.currentTime + (ok ? 0.15 : 0.4));
+  } catch { /* sem áudio */ }
+}
+
+// ------------------------- registo recente -------------------------
+async function loadLog() {
+  const rows = await api('/api/scan/recent');
+  if (!rows.length) return;
+  $('#log-body').innerHTML = rows.map(l => `
+    <tr>
+      <td>${fmtDate(l.created_at)}</td>
+      <td>${esc(l.holder)} ${l.type === 'visitor' ? '<span class="badge info">Visitante</span>' : ''}</td>
+      <td>${l.direction === 'in' ? '⬇️ Entrada' : '⬆️ Saída'}</td>
+      <td>${l.result === 'granted'
+        ? '<span class="badge ok">Autorizado</span>'
+        : `<span class="badge bad" title="${esc(l.reason)}">Negado</span>`}</td>
+    </tr>`).join('');
+}
+loadLog();
+setInterval(loadLog, 10000);
+</script>
+</body>
+</html>

@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Administração — SecurePass</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="topbar">
+  <div class="logo"><a href="/" style="color:inherit">🛡️ Secure<span>Pass</span></a> · Administração</div>
+  <div class="spacer"></div>
+  <div class="who" id="who"></div>
+  <button class="btn-ghost btn-sm" id="btn-logout" style="display:none">Sair</button>
+</div>
+
+<!-- ============ LOGIN ============ -->
+<div class="wrap narrow" id="view-login">
+  <div class="card">
+    <h2>Acesso de administrador</h2>
+    <div class="msg" id="login-msg"></div>
+    <label>E-mail</label>
+    <input id="login-email" type="email" placeholder="admin@empresa.com" autocomplete="username">
+    <label>Palavra-passe</label>
+    <input id="login-pass" type="password" autocomplete="current-password">
+    <div class="mt"><button id="btn-login" style="width:100%">Entrar</button></div>
+    <p class="muted mt">Demonstração: <b>admin@empresa.com</b> / <b>admin123</b></p>
+  </div>
+</div>
+
+<!-- ============ DASHBOARD ============ -->
+<div class="wrap" id="view-dash" style="display:none">
+  <div class="grid grid-3" id="stats" style="margin-bottom:20px"></div>
+
+  <div class="tabs">
+    <button class="active" data-tab="logs">📜 Registo de acessos</button>
+    <button data-tab="passes">🎫 Passes</button>
+    <button data-tab="employees">👥 Colaboradores</button>
+  </div>
+
+  <!-- Logs -->
+  <div class="card tab-pane" id="tab-logs">
+    <h2>Registo de acessos (mais recentes primeiro)</h2>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Data/hora</th><th>Portador</th><th>Tipo</th><th>Movimento</th><th>Portaria</th><th>Resultado</th></tr></thead>
+        <tbody id="logs-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Passes -->
+  <div class="card tab-pane" id="tab-passes" style="display:none">
+    <h2>Passes emitidos</h2>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Portador</th><th>Tipo</th><th>Motivo</th><th>Validade</th><th>Estado</th><th></th></tr></thead>
+        <tbody id="passes-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Colaboradores -->
+  <div class="card tab-pane" id="tab-employees" style="display:none">
+    <div class="row" style="justify-content:space-between">
+      <h2>Colaboradores</h2>
+      <button class="btn-sm" id="btn-new-emp">➕ Novo colaborador</button>
+    </div>
+    <div class="table-scroll mt">
+      <table>
+        <thead><tr><th>Nome</th><th>E-mail</th><th>Departamento</th><th>Perfil</th><th>Estado</th><th></th></tr></thead>
+        <tbody id="emp-body"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ============ MODAL NOVO COLABORADOR ============ -->
+<div class="modal-back" id="emp-modal">
+  <div class="modal">
+    <h2>Novo colaborador</h2>
+    <div class="msg" id="emp-msg"></div>
+    <label>Nome completo *</label>
+    <input id="e-name" maxlength="120">
+    <label>E-mail *</label>
+    <input id="e-email" type="email" maxlength="120">
+    <label>Palavra-passe inicial *</label>
+    <input id="e-pass" type="text" maxlength="60">
+    <label>Departamento</label>
+    <input id="e-dept" maxlength="80">
+    <label>Perfil</label>
+    <select id="e-role">
+      <option value="employee">Colaborador</option>
+      <option value="admin">Administrador</option>
+    </select>
+    <div class="row mt">
+      <button class="btn-ghost" onclick="$('#emp-modal').classList.remove('show')">Cancelar</button>
+      <button style="flex:1" id="btn-save-emp">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<script src="/js/common.js"></script>
+<script>
+'use strict';
+let me = null;
+
+async function boot() {
+  try {
+    me = await api('/api/auth/me');
+    if (me.role !== 'admin') throw new Error('not admin');
+    enterDash();
+  } catch { /* mostra login */ }
+}
+
+$('#btn-login').onclick = async () => {
+  try {
+    me = await api('/api/auth/login', { method: 'POST', body: { email: $('#login-email').value, password: $('#login-pass').value } });
+    if (me.role !== 'admin') return showMsg($('#login-msg'), 'Esta conta não tem perfil de administrador.');
+    enterDash();
+  } catch (e) { showMsg($('#login-msg'), e.message); }
+};
+$('#login-pass').addEventListener('keydown', e => { if (e.key === 'Enter') $('#btn-login').click(); });
+$('#btn-logout').onclick = async () => { await api('/api/auth/logout', { method: 'POST' }); location.reload(); };
+
+function enterDash() {
+  $('#view-login').style.display = 'none';
+  $('#view-dash').style.display = '';
+  $('#btn-logout').style.display = '';
+  $('#who').textContent = me.name;
+  loadAll();
+  setInterval(loadStats, 15000);
+}
+
+function loadAll() { loadStats(); loadLogs(); loadPasses(); loadEmployees(); }
+
+// ------------------------- tabs -------------------------
+$all('.tabs button').forEach(b => b.onclick = () => {
+  $all('.tabs button').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  $all('.tab-pane').forEach(p => p.style.display = 'none');
+  $(`#tab-${b.dataset.tab}`).style.display = '';
+});
+
+// ------------------------- estatísticas -------------------------
+async function loadStats() {
+  const s = await api('/api/admin/stats');
+  $('#stats').innerHTML = `
+    <div class="stat"><div class="n">${s.employees}</div><div class="l">Colaboradores ativos</div></div>
+    <div class="stat"><div class="n">${s.active_passes}</div><div class="l">Passes válidos neste momento</div></div>
+    <div class="stat"><div class="n">${s.visitors_today}</div><div class="l">Visitantes registados hoje</div></div>
+    <div class="stat"><div class="n" style="color:var(--ok)">${s.accesses_today}</div><div class="l">Acessos autorizados hoje</div></div>
+    <div class="stat"><div class="n" style="color:var(--bad)">${s.denied_today}</div><div class="l">Tentativas negadas hoje</div></div>`;
+}
+
+// ------------------------- logs -------------------------
+async function loadLogs() {
+  const rows = await api('/api/admin/logs');
+  $('#logs-body').innerHTML = rows.length ? rows.map(l => `
+    <tr>
+      <td>${fmtDate(l.created_at)}</td>
+      <td>${esc(l.holder)}</td>
+      <td>${l.type === 'visitor' ? '<span class="badge info">Visitante</span>' : l.type === 'employee' ? '<span class="badge muted">Colaborador</span>' : '—'}</td>
+      <td>${l.direction === 'in' ? '⬇️ Entrada' : '⬆️ Saída'}</td>
+      <td>${esc(l.gate)}</td>
+      <td>${l.result === 'granted'
+        ? '<span class="badge ok">Autorizado</span>'
+        : `<span class="badge bad">Negado</span> <span class="muted">${esc(l.reason)}</span>`}</td>
+    </tr>`).join('') : '<tr><td colspan="6" class="muted">Sem registos de acesso.</td></tr>';
+}
+
+// ------------------------- passes -------------------------
+async function loadPasses() {
+  const rows = await api('/api/admin/passes');
+  $('#passes-body').innerHTML = rows.length ? rows.map(p => `
+    <tr>
+      <td>${esc(p.holder || '—')}${p.host_name ? `<div class="muted">Anfitrião: ${esc(p.host_name)}</div>` : ''}</td>
+      <td>${p.type === 'visitor' ? '<span class="badge info">Visitante</span>' : '<span class="badge muted">Colaborador</span>'}</td>
+      <td>${esc(p.purpose)}</td>
+      <td>${fmtDate(p.valid_from)}<br><span class="muted">até ${fmtDate(p.valid_until)}</span></td>
+      <td>${STATE_BADGE[p.state] || ''}</td>
+      <td>${p.state === 'valid' ? `<button class="btn-sm btn-danger" onclick="revokePass(${p.id})">Revogar</button>` : ''}</td>
+    </tr>`).join('') : '<tr><td colspan="6" class="muted">Sem passes emitidos.</td></tr>';
+}
+
+async function revokePass(id) {
+  if (!confirm('Revogar este passe? O acesso será negado de imediato.')) return;
+  await api(`/api/admin/passes/${id}/revoke`, { method: 'POST' });
+  loadPasses(); loadStats();
+}
+
+// ------------------------- colaboradores -------------------------
+async function loadEmployees() {
+  const rows = await api('/api/admin/employees');
+  $('#emp-body').innerHTML = rows.map(e => `
+    <tr>
+      <td>${esc(e.name)}</td>
+      <td>${esc(e.email)}</td>
+      <td>${esc(e.department || '—')}</td>
+      <td>${e.role === 'admin' ? '<span class="badge warn">Admin</span>' : 'Colaborador'}</td>
+      <td>${e.active ? '<span class="badge ok">Ativo</span>' : '<span class="badge bad">Inativo</span>'}</td>
+      <td>${e.id !== me.id ? `<button class="btn-sm btn-ghost" onclick="toggleEmp(${e.id})">${e.active ? 'Desativar' : 'Reativar'}</button>` : '<span class="muted">(a sua conta)</span>'}</td>
+    </tr>`).join('');
+}
+
+async function toggleEmp(id) {
+  await api(`/api/admin/employees/${id}/toggle`, { method: 'POST' });
+  loadEmployees(); loadStats();
+}
+
+$('#btn-new-emp').onclick = () => {
+  ['e-name', 'e-email', 'e-pass', 'e-dept'].forEach(id => $(`#${id}`).value = '');
+  $('#e-role').value = 'employee';
+  $('#emp-modal').classList.add('show');
+};
+
+$('#btn-save-emp').onclick = async () => {
+  try {
+    await api('/api/admin/employees', {
+      method: 'POST',
+      body: {
+        name: $('#e-name').value,
+        email: $('#e-email').value,
+        password: $('#e-pass').value,
+        department: $('#e-dept').value,
+        role: $('#e-role').value,
+      },
+    });
+    $('#emp-modal').classList.remove('show');
+    loadEmployees(); loadStats();
+  } catch (e) { showMsg($('#emp-msg'), e.message); }
+};
+
+boot();
+</script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(node --version)",
+      "PowerShell(npm --version)",
+      "PowerShell(python --version)",
+      "PowerShell(py --version)",
+      "PowerShell(pip --version)",
+      "PowerShell(winget --version)",
+      "PowerShell(winget install OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements --silent)",
+      "PowerShell(& \"C:\\\\Program Files\\\\nodejs\\\\node.exe\" --version)",
+      "PowerShell(& \"C:\\\\Program Files\\\\nodejs\\\\npm.cmd\" --version)",
+      "PowerShell($env:Path = \"C:\\\\Program Files\\\\nodejs;$env:Path\"; npm install --no-audit --no-fund)",
+      "PowerShell($env:Path = \"C:\\\\Program Files\\\\nodejs;$env:Path\"; node src/seed.js)",
+      "PowerShell($env:Path = \"C:\\\\Program Files\\\\nodejs;$env:Path\"; node \"C:\\\\Users\\\\AMANDI~1.ZUM\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-amandio-zumba-Downloads-ACCESS\\\\6572ba0b-f13b-45be-a293-d46b6e9bcfc6\\\\scratchpad\\\\cleanup.js\")",
+      "PowerShell($env:Path = \"C:\\\\Program Files\\\\nodejs;$env:Path\"; node server.js)",
+      "PowerShell($env:Path = \"C:\\\\Program Files\\\\nodejs;$env:Path\"; node \"C:\\\\Users\\\\AMANDI~1.ZUM\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-amandio-zumba-Downloads-ACCESS\\\\6572ba0b-f13b-45be-a293-d46b6e9bcfc6\\\\scratchpad\\\\test-auto.js\")",
+      "PowerShell($env:Path = \"C:\\\\Program Files\\\\nodejs;$env:Path\"; node \"C:\\\\Users\\\\AMANDI~1.ZUM\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-amandio-zumba-Downloads-ACCESS\\\\6572ba0b-f13b-45be-a293-d46b6e9bcfc6\\\\scratchpad\\\\test-rules.js\")"
+    ]
+  }
+}

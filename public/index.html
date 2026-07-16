@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SecurePass — Controlo de Acesso Físico</title>
+<link rel="stylesheet" href="/css/style.css">
+<style>
+  .hero { text-align: center; padding: 60px 20px 30px; }
+  .hero h1 { font-size: 2.2rem; }
+  .hero h1 span { color: var(--accent-2); }
+  .hero p { color: var(--muted); margin-top: 10px; max-width: 620px; margin-inline: auto; }
+  .apps { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); margin-top: 34px; }
+  .app {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 26px 22px; text-align: center; color: var(--text); transition: transform .15s, border-color .15s;
+  }
+  .app:hover { transform: translateY(-3px); border-color: var(--accent); }
+  .app .ico { font-size: 2.4rem; }
+  .app h3 { margin: 12px 0 6px; }
+  .app p { color: var(--muted); font-size: .85rem; }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="logo">🛡️ Secure<span>Pass</span></div>
+  <div class="spacer"></div>
+  <div class="who">Gestão e Controlo de Acesso Físico</div>
+</div>
+
+<div class="wrap">
+  <div class="hero">
+    <h1>Plataforma de <span>Controlo de Acesso</span></h1>
+    <p>Gestão segura de entradas e saídas de colaboradores e visitantes através de passes digitais com QR Codes dinâmicos, assinados criptograficamente e renovados a cada minuto.</p>
+  </div>
+
+  <div class="apps">
+    <a class="app" href="/portal.html">
+      <div class="ico">👤</div>
+      <h3>Portal do Colaborador</h3>
+      <p>Gere passes de acesso temporários para si e acompanhe as suas visitas.</p>
+    </a>
+    <a class="app" href="/totem.html">
+      <div class="ico">🖥️</div>
+      <h3>Totem do Visitante</h3>
+      <p>Quiosque de auto-registo: identifique-se, indique o anfitrião e receba o seu passe.</p>
+    </a>
+    <a class="app" href="/scanner.html">
+      <div class="ico">📷</div>
+      <h3>Scanner da Portaria</h3>
+      <p>Validação de passes por câmara e registo de entradas e saídas.</p>
+    </a>
+    <a class="app" href="/admin.html">
+      <div class="ico">⚙️</div>
+      <h3>Administração</h3>
+      <p>Gestão de colaboradores, passes ativos e registo completo de acessos.</p>
+    </a>
+  </div>
+</div>
+</body>
+</html>

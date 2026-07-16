@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Totem do Visitante — SecurePass</title>
+<link rel="stylesheet" href="/css/style.css">
+<style>
+  body { display: flex; flex-direction: column; }
+  .kiosk { flex: 1; display: flex; align-items: center; justify-content: center; padding: 24px; }
+  .panel { width: 100%; max-width: 640px; }
+  .steps { display: flex; gap: 8px; justify-content: center; margin-bottom: 26px; }
+  .steps i {
+    width: 42px; height: 6px; border-radius: 3px; background: var(--panel-2); display: block;
+  }
+  .steps i.on { background: var(--accent); }
+  .kiosk h1 { font-size: 1.7rem; text-align: center; margin-bottom: 4px; }
+  .kiosk .sub { text-align: center; color: var(--muted); margin-bottom: 22px; }
+  .kiosk input, .kiosk select { font-size: 1.15rem; padding: 15px 16px; }
+  .kiosk button { font-size: 1.1rem; padding: 15px 24px; }
+  .host-list { margin-top: 10px; display: grid; gap: 8px; }
+  .host-item {
+    padding: 14px 16px; border-radius: 10px; border: 1px solid var(--line);
+    background: var(--panel-2); cursor: pointer; display: flex; justify-content: space-between; align-items: center;
+  }
+  .host-item:hover, .host-item.sel { border-color: var(--accent); background: rgba(59,130,246,.12); }
+  .host-item .dep { color: var(--muted); font-size: .85rem; }
+  .summary { background: var(--panel-2); border-radius: 10px; padding: 16px; margin: 14px 0; }
+  .summary div { display: flex; justify-content: space-between; padding: 5px 0; }
+  .summary span:first-child { color: var(--muted); }
+  .bignote { font-size: 1.05rem; color: var(--warn); text-align: center; margin-top: 14px; }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="logo">🛡️ Secure<span>Pass</span> · Receção — Auto-Registo de Visitantes</div>
+  <div class="spacer"></div>
+  <a class="btn-ghost btn-sm" href="/">Sair do quiosque</a>
+</div>
+
+<div class="kiosk">
+  <div class="panel card" style="padding:34px">
+    <div class="steps"><i id="s1" class="on"></i><i id="s2"></i><i id="s3"></i><i id="s4"></i></div>
+    <div class="msg" id="tmsg"></div>
+
+    <!-- Passo 1: boas-vindas -->
+    <div class="step" id="step-1">
+      <h1>👋 Bem-vindo(a)!</h1>
+      <p class="sub">Registe a sua visita em menos de um minuto e receba o seu passe de acesso digital.</p>
+      <button style="width:100%" onclick="go(2)">Iniciar registo</button>
+    </div>
+
+    <!-- Passo 2: dados pessoais -->
+    <div class="step" id="step-2" style="display:none">
+      <h1>Os seus dados</h1>
+      <p class="sub">Preencha com os dados do seu documento de identificação.</p>
+      <label>Nome completo *</label>
+      <input id="v-name" placeholder="Ex.: Maria João Silva" maxlength="120">
+      <label>Tipo de documento *</label>
+      <select id="v-doctype">
+        <option value="CC">Cartão de Cidadão</option>
+        <option value="Passaporte">Passaporte</option>
+        <option value="Outro">Outro</option>
+      </select>
+      <label>Número do documento *</label>
+      <input id="v-docnum" placeholder="Ex.: 12345678" maxlength="40">
+      <label>Empresa / organização (opcional)</label>
+      <input id="v-company" placeholder="Ex.: TechCorp, Lda." maxlength="120">
+      <div class="row mt">
+        <button class="btn-ghost" onclick="go(1)">← Voltar</button>
+        <button style="flex:1" onclick="toStep3()">Continuar →</button>
+      </div>
+    </div>
+
+    <!-- Passo 3: anfitrião -->
+    <div class="step" id="step-3" style="display:none">
+      <h1>Quem vai visitar?</h1>
+      <p class="sub">Escreva o nome do colaborador que o vai receber.</p>
+      <input id="v-host-q" placeholder="Escreva pelo menos 2 letras…" autocomplete="off">
+      <div class="host-list" id="host-list"></div>
+      <div class="row mt">
+        <button class="btn-ghost" onclick="go(2)">← Voltar</button>
+        <button style="flex:1" id="btn-confirm" disabled onclick="submitVisit()">Confirmar visita →</button>
+      </div>
+    </div>
+
+    <!-- Passo 4: passe emitido -->
+    <div class="step" id="step-4" style="display:none">
+      <h1>✅ Passe emitido!</h1>
+      <p class="sub">Apresente este QR Code no leitor da portaria — o mesmo passe serve para a entrada e para a saída.</p>
+      <div class="summary" id="v-summary"></div>
+      <div class="qr-box">
+        <img id="v-qr" alt="QR Code do passe de visitante">
+        <div class="qr-countdown" id="v-qr-info"></div>
+      </div>
+      <p class="bignote">📱 Fotografe este código com o seu telemóvel.<br>Vale para 1 entrada e 1 saída durante o dia de hoje.</p>
+      <div class="mt"><button style="width:100%" class="btn-ghost" onclick="resetKiosk()">Terminar — novo registo</button></div>
+    </div>
+  </div>
+</div>
+
+<script src="/js/common.js"></script>
+<script>
+'use strict';
+let selHost = null;
+let idleTimer = null;
+
+function go(n) {
+  $all('.step').forEach(s => s.style.display = 'none');
+  $(`#step-${n}`).style.display = '';
+  for (let i = 1; i <= 4; i++) $(`#s${i}`).classList.toggle('on', i <= n);
+}
+
+function toStep3() {
+  if (!$('#v-name').value.trim()) return showMsg($('#tmsg'), 'Indique o seu nome completo.');
+  if (!$('#v-docnum').value.trim()) return showMsg($('#tmsg'), 'Indique o número do documento.');
+  go(3);
+  $('#v-host-q').focus();
+}
+
+// pesquisa de anfitriões (debounce)
+let searchT = null;
+$('#v-host-q').addEventListener('input', () => {
+  clearTimeout(searchT);
+  searchT = setTimeout(async () => {
+    const q = $('#v-host-q').value.trim();
+    selHost = null;
+    $('#btn-confirm').disabled = true;
+    if (q.length < 2) { $('#host-list').innerHTML = ''; return; }
+    const hosts = await api(`/api/totem/hosts?q=${encodeURIComponent(q)}`);
+    $('#host-list').innerHTML = hosts.length
+      ? hosts.map(h => `
+          <div class="host-item" data-id="${h.id}" data-name="${esc(h.name)}">
+            <b>${esc(h.name)}</b><span class="dep">${esc(h.department || '')}</span>
+          </div>`).join('')
+      : '<p class="muted center mt">Nenhum colaborador encontrado.</p>';
+    $all('.host-item').forEach(el => el.onclick = () => {
+      $all('.host-item').forEach(x => x.classList.remove('sel'));
+      el.classList.add('sel');
+      selHost = { id: Number(el.dataset.id), name: el.dataset.name };
+      $('#btn-confirm').disabled = false;
+    });
+  }, 250);
+});
+
+async function submitVisit() {
+  if (!selHost) return;
+  try {
+    const r = await api('/api/totem/checkin', {
+      method: 'POST',
+      body: {
+        name: $('#v-name').value,
+        document_type: $('#v-doctype').value,
+        document_number: $('#v-docnum').value,
+        company: $('#v-company').value,
+        host_id: selHost.id,
+      },
+    });
+    $('#v-summary').innerHTML = `
+      <div><span>Visitante</span><b>${esc($('#v-name').value.trim())}</b></div>
+      <div><span>Anfitrião</span><b>${esc(r.host)}</b></div>
+      <div><span>Válido até</span><b>${fmtDate(r.valid_until)}</b></div>`;
+    go(4);
+    showPassQR(r.code, $('#v-qr'), $('#v-qr-info'), (msg) => showMsg($('#tmsg'), msg));
+    // por privacidade, o quiosque limpa-se sozinho ao fim de 3 minutos
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(resetKiosk, 3 * 60 * 1000);
+  } catch (e) { showMsg($('#tmsg'), e.message); }
+}
+
+function resetKiosk() {
+  clearTimeout(idleTimer);
+  ['v-name', 'v-docnum', 'v-company', 'v-host-q'].forEach(id => $(`#${id}`).value = '');
+  $('#v-doctype').value = 'CC';
+  $('#host-list').innerHTML = '';
+  selHost = null;
+  $('#btn-confirm').disabled = true;
+  go(1);
+}
+</script>
+</body>
+</html>

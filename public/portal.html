@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Portal do Colaborador — SecurePass</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="topbar">
+  <div class="logo"><a href="/" style="color:inherit">🛡️ Secure<span>Pass</span></a> · Portal do Colaborador</div>
+  <div class="spacer"></div>
+  <div class="who" id="who"></div>
+  <button class="btn-ghost btn-sm" id="btn-logout" style="display:none">Sair</button>
+</div>
+
+<!-- ============ LOGIN ============ -->
+<div class="wrap narrow" id="view-login">
+  <div class="card">
+    <h2>Iniciar sessão</h2>
+    <div class="msg" id="login-msg"></div>
+    <label>E-mail corporativo</label>
+    <input id="login-email" type="email" placeholder="nome@empresa.com" autocomplete="username">
+    <label>Palavra-passe</label>
+    <input id="login-pass" type="password" autocomplete="current-password">
+    <div class="mt"><button id="btn-login" style="width:100%">Entrar</button></div>
+    <p class="muted mt">Demonstração: <b>ana@empresa.com</b> / <b>ana123</b></p>
+  </div>
+</div>
+
+<!-- ============ DASHBOARD ============ -->
+<div class="wrap" id="view-dash" style="display:none">
+  <div class="grid grid-2">
+    <div class="card">
+      <h2>Gerar passe de acesso temporário</h2>
+      <div class="msg" id="gen-msg"></div>
+      <label>Motivo / observação</label>
+      <input id="gen-purpose" placeholder="Ex.: Acesso fora de horas, esqueci o cartão…" maxlength="200">
+      <label>Validade</label>
+      <select id="gen-hours">
+        <option value="1">1 hora</option>
+        <option value="4">4 horas</option>
+        <option value="8" selected>8 horas (dia de trabalho)</option>
+        <option value="24">24 horas</option>
+        <option value="72">3 dias</option>
+      </select>
+      <div class="mt"><button id="btn-gen" style="width:100%">🎫 Gerar passe com QR Code</button></div>
+      <p class="muted mt">O QR Code é assinado criptograficamente pelo servidor e permite entradas e saídas ilimitadas durante o período de validade. Pode guardá-lo no telemóvel.</p>
+    </div>
+
+    <div class="card">
+      <h2>Visitas de que sou anfitrião</h2>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Visitante</th><th>Empresa</th><th>Registo</th><th>Estado</th></tr></thead>
+          <tbody id="visits-body"><tr><td colspan="4" class="muted">Sem visitas registadas.</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Os meus passes</h2>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Motivo</th><th>Válido de</th><th>Válido até</th><th>Estado</th><th></th></tr></thead>
+        <tbody id="passes-body"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ============ MODAL QR ============ -->
+<div class="modal-back" id="qr-modal">
+  <div class="modal">
+    <h2>🎫 Passe de acesso</h2>
+    <p class="muted" id="qr-sub"></p>
+    <div class="qr-box">
+      <img id="qr-img" alt="QR Code do passe">
+      <div class="qr-countdown" id="qr-info"></div>
+    </div>
+    <div class="msg" id="qr-msg"></div>
+    <div class="mt center"><button class="btn-ghost" id="qr-close">Fechar</button></div>
+  </div>
+</div>
+
+<script src="/js/common.js"></script>
+<script>
+'use strict';
+let me = null;
+
+// ------------------------- sessão -------------------------
+async function boot() {
+  try {
+    me = await api('/api/auth/me');
+    enterDash();
+  } catch { /* mostra login */ }
+}
+
+function enterDash() {
+  $('#view-login').style.display = 'none';
+  $('#view-dash').style.display = '';
+  $('#btn-logout').style.display = '';
+  $('#who').textContent = `${me.name} · ${me.department || ''}`;
+  loadPasses();
+  loadVisits();
+}
+
+$('#btn-login').onclick = async () => {
+  try {
+    me = await api('/api/auth/login', { method: 'POST', body: { email: $('#login-email').value, password: $('#login-pass').value } });
+    enterDash();
+  } catch (e) { showMsg($('#login-msg'), e.message); }
+};
+$('#login-pass').addEventListener('keydown', e => { if (e.key === 'Enter') $('#btn-login').click(); });
+
+$('#btn-logout').onclick = async () => { await api('/api/auth/logout', { method: 'POST' }); location.reload(); };
+
+// ------------------------- passes -------------------------
+async function loadPasses() {
+  const rows = await api('/api/passes/mine');
+  const body = $('#passes-body');
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="5" class="muted">Ainda não gerou nenhum passe.</td></tr>';
+    return;
+  }
+  body.innerHTML = rows.map(p => `
+    <tr>
+      <td>${esc(p.purpose)}</td>
+      <td>${fmtDate(p.valid_from)}</td>
+      <td>${fmtDate(p.valid_until)}</td>
+      <td>${STATE_BADGE[p.state] || ''}</td>
+      <td class="row" style="justify-content:flex-end">
+        ${p.state === 'valid' ? `<button class="btn-sm" onclick="openQR('${p.code}', '${esc(p.purpose).replace(/'/g, '')}')">Ver QR</button>
+        <button class="btn-sm btn-danger" onclick="revoke(${p.id})">Revogar</button>` : ''}
+      </td>
+    </tr>`).join('');
+}
+
+$('#btn-gen').onclick = async () => {
+  try {
+    const p = await api('/api/passes', { method: 'POST', body: { purpose: $('#gen-purpose').value, hours: $('#gen-hours').value } });
+    showMsg($('#gen-msg'), 'Passe criado com sucesso.', 'ok');
+    $('#gen-purpose').value = '';
+    await loadPasses();
+    openQR(p.code, 'Passe temporário');
+  } catch (e) { showMsg($('#gen-msg'), e.message); }
+};
+
+async function revoke(id) {
+  if (!confirm('Revogar este passe? O QR Code deixará de ser aceite de imediato.')) return;
+  await api(`/api/passes/mine/${id}/revoke`, { method: 'POST' });
+  loadPasses();
+}
+
+// ------------------------- visitas -------------------------
+async function loadVisits() {
+  const rows = await api('/api/host/visits');
+  const body = $('#visits-body');
+  if (!rows.length) return;
+  body.innerHTML = rows.map(v => `
+    <tr>
+      <td>${esc(v.name)}${v.last_move === 'in' ? ' <span class="badge info">No edifício</span>' : ''}</td>
+      <td>${esc(v.company || '—')}</td>
+      <td>${fmtDate(v.created_at)}</td>
+      <td>${STATE_BADGE[v.state] || ''}</td>
+    </tr>`).join('');
+}
+
+// ------------------------- modal QR -------------------------
+function openQR(code, subtitle) {
+  $('#qr-sub').textContent = subtitle || '';
+  $('#qr-img').removeAttribute('src');
+  $('#qr-info').textContent = '';
+  $('#qr-modal').classList.add('show');
+  showPassQR(code, $('#qr-img'), $('#qr-info'), (msg) => showMsg($('#qr-msg'), msg));
+}
+$('#qr-close').onclick = () => $('#qr-modal').classList.remove('show');
+
+boot();
+</script>
+</body>
+</html>
