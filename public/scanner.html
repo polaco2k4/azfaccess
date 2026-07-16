@@ -26,6 +26,9 @@
   .result h2 { font-size: 1.5rem; margin: 8px 0 4px; color: inherit; }
   .result .holder { font-size: 1.2rem; font-weight: 700; }
   .result .detail { color: var(--muted); margin-top: 4px; }
+  .result .doc { margin-top: 14px; display: none; }
+  .result .doc img { max-width: 240px; width: 100%; border-radius: 10px; border: 1px solid var(--line); }
+  .result .doc .doc-meta { font-size: .85rem; color: var(--muted); margin-top: 4px; }
   .dir-toggle { display: flex; gap: 10px; }
   .dir-toggle button { flex: 1; font-size: 1.05rem; padding: 14px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); }
   .dir-toggle button.on-auto { background: var(--accent); color: #fff; border-color: var(--accent); }
@@ -72,6 +75,10 @@
         <h2 id="r-title"></h2>
         <div class="holder" id="r-holder"></div>
         <div class="detail" id="r-detail"></div>
+        <div class="doc" id="r-doc">
+          <img id="r-doc-img" alt="Documento do visitante">
+          <div class="doc-meta" id="r-doc-meta"></div>
+        </div>
       </div>
     </div>
 
@@ -155,6 +162,19 @@ async function validate(token) {
     $('#r-title').textContent = r.direction === 'in' ? 'ENTRADA AUTORIZADA' : 'SAÍDA REGISTADA';
     $('#r-holder').textContent = r.holder;
     $('#r-detail').textContent = r.detail + (r.purpose ? ` · ${r.purpose}` : '');
+    // documento do visitante (para conferência visual pelo segurança)
+    if (r.document) {
+      $('#r-doc-meta').textContent = `${r.document.type} n.º ${r.document.number}`;
+      if (r.document.image_url) {
+        $('#r-doc-img').src = r.document.image_url;
+        $('#r-doc-img').style.display = '';
+      } else {
+        $('#r-doc-img').style.display = 'none';
+      }
+      $('#r-doc').style.display = 'block';
+    } else {
+      $('#r-doc').style.display = 'none';
+    }
     beep(true);
   } catch (e) {
     box.className = 'result denied';
@@ -162,13 +182,14 @@ async function validate(token) {
     $('#r-title').textContent = 'ACESSO NEGADO';
     $('#r-holder').textContent = '';
     $('#r-detail').textContent = e.message;
+    $('#r-doc').style.display = 'none';
     beep(false);
   }
   box.style.display = '';
   $('#manual-token').value = '';
   loadLog();
   clearTimeout(box._t);
-  box._t = setTimeout(() => { box.style.display = 'none'; }, 6000);
+  box._t = setTimeout(() => { box.style.display = 'none'; }, 10000);
 }
 
 function beep(ok) {

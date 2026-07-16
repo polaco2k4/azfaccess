@@ -1,5 +1,6 @@
 'use strict';
 const path = require('path');
+const fs = require('fs');
 const express = require('express');
 const QRCode = require('qrcode');
 const db = require('./src/db');
@@ -8,10 +9,17 @@ const sec = require('./src/security');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json());
+const DOCS_DIR = path.join(__dirname, 'data', 'docs');
+if (!fs.existsSync(DOCS_DIR)) fs.mkdirSync(DOCS_DIR, { recursive: true });
+
+app.use(express.json({ limit: '8mb' })); // fotografias de documentos em base64
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/vendor/jsqr.js', (req, res) =>
   res.sendFile(require.resolve('jsqr/dist/jsQR.js')));
+// OCR local (tesseract.js) para leitura da zona MRZ dos documentos no totem
+app.use('/vendor/tesseract', express.static(path.dirname(require.resolve('tesseract.js/dist/tesseract.min.js'))));
+app.use('/vendor/tesseract-core', express.static(path.dirname(require.resolve('tesseract.js-core/tesseract-core.wasm.js'))));
+app.use('/vendor/tessdata', express.static(path.join(__dirname, 'vendor', 'tessdata')));
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -159,7 +167,7 @@ app.get('/api/totem/hosts', (req, res) => {
 });
 
 app.post('/api/totem/checkin', (req, res) => {
-  const { name, document_type, document_number, company, host_id } = req.body || {};
+  const { name, document_type, document_number, company, host_id, document_image } = req.body || {};
   if (!String(name || '').trim()) return res.status(400).json({ error: 'Indique o seu nome completo.' });
   if (!String(document_number || '').trim()) return res.status(400).json({ error: 'Indique o número do documento.' });
   const host = db.prepare('SELECT id, name, department FROM employees WHERE id = ? AND active = 1').get(Number(host_id));
@@ -170,11 +178,24 @@ app.post('/api/totem/checkin', (req, res) => {
     VALUES (?, ?, ?, ?, ?)
   `).run(
     String(name).trim().slice(0, 120),
-    ['CC', 'Passaporte', 'Outro'].includes(document_type) ? document_type : 'Outro',
+    ['BI', 'CC', 'Passaporte', 'Outro'].includes(document_type) ? document_type : 'Outro',
     String(document_number).trim().slice(0, 40),
     String(company || '').trim().slice(0, 120),
     host.id
   );
+  const visitorId = Number(vInfo.lastInsertRowid);
+
+  // fotografia do documento digitalizada no totem (JPEG em data-URL)
+  if (typeof document_image === 'string' && document_image.startsWith('data:image/jpeg;base64,')) {
+    try {
+      const jpeg = Buffer.from(document_image.slice('data:image/jpeg;base64,'.length), 'base64');
+      if (jpeg.length > 0 && jpeg.length <= 5 * 1024 * 1024) {
+        const file = `v${visitorId}.jpg`;
+        fs.writeFileSync(path.join(DOCS_DIR, file), jpeg);
+        db.prepare('UPDATE visitors SET document_image = ? WHERE id = ?').run(file, visitorId);
+      }
+    } catch { /* documento fica sem imagem; o registo manual continua válido */ }
+  }
 
   const from = new Date();
   const until = new Date(from.getTime() + 8 * 3600 * 1000); // passe de visitante válido 8h
@@ -182,7 +203,7 @@ app.post('/api/totem/checkin', (req, res) => {
   const pInfo = db.prepare(`
     INSERT INTO passes (code, type, visitor_id, purpose, valid_from, valid_until)
     VALUES (?, 'visitor', ?, ?, ?, ?)
-  `).run(code, Number(vInfo.lastInsertRowid), `Visita a ${host.name}`, from.toISOString(), until.toISOString());
+  `).run(code, visitorId, `Visita a ${host.name}`, from.toISOString(), until.toISOString());
 
   res.json({
     pass_id: Number(pInfo.lastInsertRowid),
@@ -190,6 +211,24 @@ app.post('/api/totem/checkin', (req, res) => {
     host: host.name,
     valid_until: until.toISOString(),
   });
+});
+
+// Fotografia do documento — acessível pela portaria através do código opaco
+// (UUID) do passe, que só é conhecido após uma leitura de QR válida.
+app.get('/api/visitor-doc/:passCode', (req, res) => {
+  const row = db.prepare(`
+    SELECT v.document_image FROM passes p
+    JOIN visitors v ON v.id = p.visitor_id
+    WHERE p.code = ? AND p.type = 'visitor'
+  `).get(req.params.passCode);
+  if (!row || !row.document_image) return res.status(404).json({ error: 'Sem documento digitalizado.' });
+  res.sendFile(path.join(DOCS_DIR, path.basename(row.document_image)));
+});
+
+app.get('/api/admin/visitor-doc/:visitorId', requireAdmin, (req, res) => {
+  const row = db.prepare('SELECT document_image FROM visitors WHERE id = ?').get(Number(req.params.visitorId));
+  if (!row || !row.document_image) return res.status(404).json({ error: 'Sem documento digitalizado.' });
+  res.sendFile(path.join(DOCS_DIR, path.basename(row.document_image)));
 });
 
 // ---------------------------------------------------------------------------
@@ -242,7 +281,7 @@ app.post('/api/scan', async (req, res) => {
     if (dir === 'out' && used.ins === 0) return deny('Saída negada: este passe de visitante não tem entrada registada.', pass.id);
   }
 
-  let holder, detail;
+  let holder, detail, docInfo = null;
   if (pass.type === 'employee') {
     const e = db.prepare('SELECT name, department, active FROM employees WHERE id = ?').get(pass.employee_id);
     if (!e || !e.active) return deny('Colaborador inativo.', pass.id);
@@ -250,11 +289,20 @@ app.post('/api/scan', async (req, res) => {
     detail = `Colaborador — ${e.department || 's/ departamento'}`;
   } else {
     const v = db.prepare(`
-      SELECT v.name, v.company, e.name AS host_name FROM visitors v
+      SELECT v.name, v.company, v.document_type, v.document_number, v.document_image,
+             e.name AS host_name
+      FROM visitors v
       JOIN employees e ON e.id = v.host_id WHERE v.id = ?
     `).get(pass.visitor_id);
     holder = v ? v.name : 'Visitante';
     detail = v ? `Visitante${v.company ? ' — ' + v.company : ''} · Anfitrião: ${v.host_name}` : 'Visitante';
+    if (v) {
+      docInfo = {
+        type: v.document_type,
+        number: v.document_number,
+        image_url: v.document_image ? `/api/visitor-doc/${pass.code}` : null,
+      };
+    }
   }
 
   db.prepare(`INSERT INTO access_logs (pass_id, direction, result, reason, gate) VALUES (?, ?, 'granted', '', ?)`)
@@ -268,6 +316,7 @@ app.post('/api/scan', async (req, res) => {
     type: pass.type,
     purpose: pass.purpose,
     valid_until: pass.valid_until,
+    document: docInfo,
   });
 });
 
@@ -336,6 +385,9 @@ app.get('/api/admin/passes', requireAdmin, (req, res) => {
     SELECT p.id, p.type, p.purpose, p.valid_from, p.valid_until, p.status, p.created_at,
            COALESCE(e.name, v.name) AS holder,
            h.name AS host_name,
+           v.id AS visitor_id,
+           v.document_type, v.document_number,
+           CASE WHEN v.document_image IS NOT NULL THEN 1 ELSE 0 END AS has_doc,
            (SELECT COUNT(*) FROM access_logs l WHERE l.pass_id = p.id AND l.direction = 'out' AND l.result = 'granted') AS outs
     FROM passes p
     LEFT JOIN employees e ON e.id = p.employee_id

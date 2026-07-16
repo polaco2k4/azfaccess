@@ -59,4 +59,10 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_logs_created  ON access_logs(created_at);
 `);
 
+// Migração: fotografia do documento do visitante (digitalizada no totem)
+const visitorCols = db.prepare(`PRAGMA table_info(visitors)`).all().map(c => c.name);
+if (!visitorCols.includes('document_image')) {
+  db.exec(`ALTER TABLE visitors ADD COLUMN document_image TEXT`);
+}
+
 module.exports = db;

@@ -25,6 +25,13 @@
   }
   .host-item:hover, .host-item.sel { border-color: var(--accent); background: rgba(59,130,246,.12); }
   .host-item .dep { color: var(--muted); font-size: .85rem; }
+  .doc-scan { border: 1px dashed var(--line); border-radius: 12px; padding: 14px; margin-top: 8px; }
+  .doc-cam { position: relative; border-radius: 10px; overflow: hidden; background: #000; aspect-ratio: 16/10; display: none; }
+  .doc-cam video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .doc-cam .doc-frame { position: absolute; inset: 8% 6%; border: 3px dashed rgba(255,255,255,.6); border-radius: 10px; pointer-events: none; }
+  .doc-preview { display: none; width: 100%; border-radius: 10px; }
+  .doc-status { font-size: .88rem; color: var(--muted); margin-top: 8px; min-height: 1.2em; }
+  .doc-status.ok { color: #4ade80; }
   .summary { background: var(--panel-2); border-radius: 10px; padding: 16px; margin: 14px 0; }
   .summary div { display: flex; justify-content: space-between; padding: 5px 0; }
   .summary span:first-child { color: var(--muted); }
@@ -53,11 +60,30 @@
     <!-- Passo 2: dados pessoais -->
     <div class="step" id="step-2" style="display:none">
       <h1>Os seus dados</h1>
-      <p class="sub">Preencha com os dados do seu documento de identificação.</p>
+      <p class="sub">Digitalize o seu documento de identificação — o sistema lê os dados automaticamente. Também pode preencher à mão.</p>
+
+      <div class="doc-scan">
+        <div class="row" style="justify-content:space-between">
+          <b>📄 Digitalizar documento</b>
+          <span>
+            <button class="btn-sm" id="doc-start">Ligar câmara</button>
+            <button class="btn-sm btn-ok" id="doc-capture" style="display:none">📸 Capturar</button>
+            <button class="btn-sm btn-ghost" id="doc-retry" style="display:none">Repetir</button>
+          </span>
+        </div>
+        <div class="doc-cam mt" id="doc-cam">
+          <video id="doc-video" playsinline muted></video>
+          <div class="doc-frame"></div>
+        </div>
+        <img class="doc-preview mt" id="doc-preview" alt="Documento digitalizado">
+        <div class="doc-status" id="doc-status">Aponte a câmara à página do documento com a zona de leitura (as linhas com &lt;&lt;&lt;).</div>
+      </div>
+
       <label>Nome completo *</label>
       <input id="v-name" placeholder="Ex.: Maria João Silva" maxlength="120">
       <label>Tipo de documento *</label>
       <select id="v-doctype">
+        <option value="BI">Bilhete de Identidade</option>
         <option value="CC">Cartão de Cidadão</option>
         <option value="Passaporte">Passaporte</option>
         <option value="Outro">Outro</option>
@@ -99,11 +125,361 @@
   </div>
 </div>
 
+<script src="/vendor/tesseract/tesseract.min.js"></script>
 <script src="/js/common.js"></script>
 <script>
 'use strict';
 let selHost = null;
 let idleTimer = null;
+let docImage = null;   // data-URL JPEG do documento capturado
+let docStream = null;
+let ocrWorker = null;
+
+// ------------------------- digitalização do documento -------------------------
+$('#doc-start').onclick = async () => {
+  try {
+    docStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 2560 }, height: { ideal: 1440 } },
+    });
+    const video = $('#doc-video');
+    video.srcObject = docStream;
+    await video.play();
+    $('#doc-cam').style.display = 'block';
+    $('#doc-preview').style.display = 'none';
+    $('#doc-start').style.display = 'none';
+    $('#doc-capture').style.display = '';
+    $('#doc-retry').style.display = 'none';
+    setDocStatus('Enquadre o documento na moldura e prima "Capturar".');
+  } catch (e) {
+    setDocStatus('Sem acesso à câmara (' + e.message + '). Preencha os campos manualmente.');
+  }
+};
+
+$('#doc-capture').onclick = () => {
+  const video = $('#doc-video');
+  const box = $('#doc-cam');
+
+  // Recorta exatamente a zona da moldura tracejada. O vídeo é apresentado
+  // com object-fit: cover, por isso primeiro calculamos a região visível.
+  const rC = box.clientWidth / box.clientHeight;
+  const vw = video.videoWidth, vh = video.videoHeight;
+  let visW, visH, offX, offY;
+  if (vw / vh > rC) { visH = vh; visW = vh * rC; offX = (vw - visW) / 2; offY = 0; }
+  else { visW = vw; visH = vw / rC; offX = 0; offY = (vh - visH) / 2; }
+  // moldura: inset 8% vertical / 6% horizontal (ver .doc-frame no CSS)
+  const sx = offX + 0.06 * visW, sw = 0.88 * visW;
+  const sy = offY + 0.08 * visH, sh = 0.84 * visH;
+
+  const canvas = document.createElement('canvas');
+  const scale = Math.min(1, 2000 / sw);
+  canvas.width = Math.round(sw * scale);
+  canvas.height = Math.round(sh * scale);
+  canvas.getContext('2d').drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+  docImage = canvas.toDataURL('image/jpeg', 0.9);
+
+  stopDocCamera();
+  const prev = $('#doc-preview');
+  prev.src = docImage;
+  prev.style.display = 'block';
+  $('#doc-cam').style.display = 'none';
+  $('#doc-capture').style.display = 'none';
+  $('#doc-retry').style.display = '';
+  readDocument(docImage);
+};
+
+$('#doc-retry').onclick = () => { docImage = null; $('#doc-start').click(); };
+
+function stopDocCamera() {
+  if (docStream) { docStream.getTracks().forEach(t => t.stop()); docStream = null; }
+}
+
+function setDocStatus(text, ok = false) {
+  const el = $('#doc-status');
+  el.textContent = text;
+  el.className = 'doc-status' + (ok ? ' ok' : '');
+}
+
+// OCR local (tesseract.js servido pelo próprio servidor — sem internet)
+async function getOcrWorker() {
+  if (ocrWorker) return ocrWorker;
+  ocrWorker = await Tesseract.createWorker('por', 1, {
+    workerPath: '/vendor/tesseract/worker.min.js',
+    corePath: '/vendor/tesseract-core',
+    langPath: '/vendor/tessdata',
+  });
+  await ocrWorker.setParameters({ user_defined_dpi: '300' });
+  return ocrWorker;
+}
+
+// Pré-processamento para OCR. Devolve duas variantes:
+//  - enhanced: cinzentos + esticamento de contraste (percentis 5–95)
+//  - binary: preto-e-branco por limiar de Otsu (mata o padrão de fundo do cartão)
+async function preprocessForOCR(dataUrl) {
+  const img = new Image();
+  await new Promise((ok, ko) => { img.onload = ok; img.onerror = ko; img.src = dataUrl; });
+  const canvas = document.createElement('canvas');
+  const scale = Math.max(1, 1600 / img.width); // amplia capturas pequenas
+  canvas.width = Math.round(img.width * scale);
+  canvas.height = Math.round(img.height * scale);
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+  const d = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const px = d.data;
+  const hist = new Uint32Array(256);
+  const grays = new Uint8Array(px.length / 4);
+  for (let i = 0, g = 0; i < px.length; i += 4, g++) {
+    const y = Math.round(0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2]);
+    grays[g] = y;
+    hist[y]++;
+  }
+  const total = grays.length;
+  let lo = 0, hi = 255, acc = 0;
+  for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= total * 0.05) { lo = v; break; } }
+  acc = 0;
+  for (let v = 255; v >= 0; v--) { acc += hist[v]; if (acc >= total * 0.05) { hi = v; break; } }
+  const range = Math.max(1, hi - lo);
+  const stretched = new Uint8Array(grays.length);
+  const hist2 = new Uint32Array(256);
+  for (let g = 0; g < grays.length; g++) {
+    const y = Math.max(0, Math.min(255, Math.round(((grays[g] - lo) / range) * 255)));
+    stretched[g] = y;
+    hist2[y]++;
+  }
+  for (let i = 0, g = 0; i < px.length; i += 4, g++) {
+    px[i] = px[i + 1] = px[i + 2] = stretched[g];
+  }
+  ctx.putImageData(d, 0, 0);
+  const enhanced = canvas.toDataURL('image/jpeg', 0.92);
+
+  // limiar de Otsu sobre o histograma da imagem esticada
+  let sumAll = 0;
+  for (let v = 0; v < 256; v++) sumAll += v * hist2[v];
+  let wB = 0, sumB = 0, best = 127, bestVar = -1;
+  for (let v = 0; v < 256; v++) {
+    wB += hist2[v];
+    if (!wB) continue;
+    const wF = total - wB;
+    if (!wF) break;
+    sumB += v * hist2[v];
+    const mB = sumB / wB, mF = (sumAll - sumB) / wF;
+    const between = wB * wF * (mB - mF) * (mB - mF);
+    if (between > bestVar) { bestVar = between; best = v; }
+  }
+  const d2 = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  for (let i = 0, g = 0; i < d2.data.length; i += 4, g++) {
+    const y = stretched[g] > best ? 255 : 0;
+    d2.data[i] = d2.data[i + 1] = d2.data[i + 2] = y;
+  }
+  ctx.putImageData(d2, 0, 0);
+  const binary = canvas.toDataURL('image/jpeg', 0.92);
+
+  return { enhanced, binary };
+}
+
+// Correção de confusões típicas de OCR no número do BI, aproveitando a
+// estrutura fixa "9 dígitos + 2 letras + 3 dígitos" (ex.: 000088905LA014):
+// em posição de dígito, B→8, S→5, O→0…; em posição de letra, 0→O, 1→I…
+const L2D = { O: '0', Q: '0', D: '0', U: '0', I: '1', L: '1', Z: '2', J: '3', A: '4', S: '5', G: '6', T: '7', B: '8', E: '8' };
+const D2L = { 0: 'O', 1: 'I', 2: 'Z', 4: 'A', 5: 'S', 6: 'G', 7: 'T', 8: 'B' };
+
+// Devolve { value, score } — score = nº de caracteres que já estavam no tipo
+// certo (máx. 14). Um score de 14 é uma leitura perfeita; entre passagens de
+// OCR ganha sempre o score mais alto, porque correções como S→5 são ambíguas
+// (um S tanto pode ser um 5 como um 8 mal lido).
+function fuzzyBINumber(text) {
+  const compact = text.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  let best = null, bestScore = -1;
+  for (let i = 0; i + 14 <= compact.length; i++) {
+    const tok = compact.slice(i, i + 14);
+    let fixed = '', score = 0, ok = true;
+    for (let p = 0; p < 14 && ok; p++) {
+      const ch = tok[p];
+      const digitPos = p < 9 || p >= 11;
+      if (digitPos) {
+        if (ch >= '0' && ch <= '9') { fixed += ch; score++; }
+        else if (L2D[ch]) fixed += L2D[ch];
+        else ok = false;
+      } else {
+        if (ch >= 'A' && ch <= 'Z') { fixed += ch; score++; }
+        else if (D2L[ch]) fixed += D2L[ch];
+        else ok = false;
+      }
+    }
+    // exige que pelo menos 11 dos 14 caracteres já estivessem corretos,
+    // para não transformar sequências aleatórias num número de BI
+    if (ok && score >= 11 && score > bestScore) { best = fixed; bestScore = score; }
+  }
+  return best ? { value: best, score: bestScore } : null;
+}
+
+// Funde vários candidatos a nome (um por passagem de OCR) por votação
+// posição-a-posição; em empate prefere o candidato da passagem "forte".
+function mergeNames(cands, preferred) {
+  const list = cands.filter(Boolean);
+  if (!list.length) return null;
+  if (list.length === 1) return list[0];
+  const split = list.map(s => s.split(' '));
+  const prefWords = preferred ? preferred.split(' ') : [];
+  const len = Math.max(...split.map(a => a.length));
+  const words = [];
+  for (let i = 0; i < len; i++) {
+    const freq = new Map();
+    for (const a of split) if (a[i]) freq.set(a[i], (freq.get(a[i]) || 0) + 1);
+    let bestW = null, bestN = 0;
+    for (const [w, n] of freq) {
+      if (n > bestN || (n === bestN && prefWords[i] === w)) { bestW = w; bestN = n; }
+    }
+    if (bestW) words.push(bestW);
+  }
+  return words.join(' ') || null;
+}
+
+async function readDocument(imageDataUrl) {
+  setDocStatus('A ler o documento… (pode demorar alguns segundos)');
+  try {
+    const [worker, pre] = await Promise.all([getOcrWorker(), preprocessForOCR(imageDataUrl)]);
+    // três variantes da mesma captura; a leitura certa ganha por votação
+    const variants = [pre.enhanced, pre.binary, imageDataUrl];
+
+    let type = null, number = null, numberScore = -1, strongName = null;
+    const nameCands = [];
+
+    for (let i = 0; i < variants.length; i++) {
+      if (i > 0) setDocStatus(`A ler o documento… (passagem ${i + 1}/${variants.length})`);
+      const { data } = await worker.recognize(variants[i]);
+      const text = data.text || '';
+      const doc = parseLabeledDoc(text) || parseMRZ(text);
+      const fuzzy = fuzzyBINumber(text);
+
+      if (doc && doc.type && !type) type = doc.type;
+      if (doc && doc.name) nameCands.push(doc.name);
+
+      // entre passagens ganha a leitura do número com mais caracteres
+      // nativamente corretos (score 14 = leitura perfeita, sem correções)
+      if (fuzzy && fuzzy.score > numberScore) {
+        number = fuzzy.value;
+        numberScore = fuzzy.score;
+        if (doc && doc.name) strongName = doc.name; // passagem mais nítida
+      } else if (numberScore < 0 && !number && doc && doc.number) {
+        number = doc.number;
+      }
+
+      // leitura perfeita do número e nomes suficientes para votar — parar
+      if (numberScore === 14 && nameCands.length >= 2) break;
+    }
+    const numberValid = numberScore >= 11;
+
+    const name = mergeNames(nameCands, strongName);
+    if (!name && !number) {
+      setDocStatus('Documento arquivado ✔ — não foi possível ler os dados; preencha abaixo.', true);
+      return;
+    }
+    if (name) $('#v-name').value = name;
+    if (number) $('#v-docnum').value = number;
+    if (type) $('#v-doctype').value = type;
+    const got = [
+      name && 'nome',
+      number && (numberValid ? 'n.º do documento ✓ validado' : 'n.º do documento (confirme)'),
+    ].filter(Boolean).join(' e ');
+    setDocStatus(`Lido do documento: ${got} — confirme e corrija se necessário.`, true);
+  } catch (e) {
+    setDocStatus('Documento arquivado ✔ — leitura automática indisponível (' + e.message + ').', true);
+  }
+}
+
+// Documentos com campos rotulados, p.ex. o Bilhete de Identidade de Angola:
+// "Nome Completo: / AMÂNDIO / ZUMBA JOAQUIM ... Bilhete de Identidade Nº: / 000088905LA014"
+function parseLabeledDoc(rawText) {
+  // normaliza: maiúsculas, sem acentos
+  const text = rawText.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+
+  const out = { type: null, number: null, name: null };
+
+  // Nº do BI angolano: 9 dígitos + 2 letras + 3 dígitos (ex.: 000088905LA014)
+  const compact = text.replace(/\s+/g, '');
+  const biNum = compact.match(/\d{9}[A-Z]{2}\d{3}/);
+  if (biNum) {
+    out.number = biNum[0];
+    out.type = 'BI';
+  } else {
+    // genérico: número na mesma linha (ou na seguinte) do rótulo "... Nº"
+    const numIdx = lines.findIndex(l => /(IDENTIDADE|DOCUMENTO|CARTAO|PASSAPORTE)\s*(N|Nº|NO|NUM)/.test(l));
+    if (numIdx !== -1) {
+      const near = `${lines[numIdx]} ${lines[numIdx + 1] || ''}`;
+      const m = near.match(/[0-9][0-9A-Z]{5,18}/);
+      if (m) out.number = m[0];
+    }
+  }
+  if (!out.type) {
+    if (/BILHETE\s+DE\s+IDENTIDADE/.test(text)) out.type = 'BI';
+    else if (/CARTAO\s+DE\s+CIDADAO/.test(text)) out.type = 'CC';
+    else if (/PASSAPORTE|PASSPORT/.test(text)) out.type = 'Passaporte';
+  }
+
+  // Nome: linhas após o rótulo "NOME", até ao rótulo seguinte (filiação, etc.)
+  const nameIdx = lines.findIndex(l => /^NOME(\s+COMPLETO)?\b/.test(l));
+  if (nameIdx !== -1) {
+    const stop = /FILIACAO|FILIAÇAO|NATURAL|NACIONALIDADE|DATA|NASCIMENTO|PAI|MAE|SEXO|ALTURA|RESIDENCIA|MORADA|BILHETE|CARTAO|Nº|ASSINATURA|VALIDADE|EMISSAO/;
+    const parts = [];
+    // texto a seguir a ":" na própria linha do rótulo
+    const inline = lines[nameIdx].replace(/^NOME(\s+COMPLETO)?\s*:?\s*/, '');
+    if (inline && /^[A-Z' -]+$/.test(inline)) parts.push(inline);
+    for (let i = nameIdx + 1; i < Math.min(lines.length, nameIdx + 5); i++) {
+      if (stop.test(lines[i])) break;
+      // aceita apenas linhas que pareçam nomes (letras, espaços, hífens)
+      const clean = lines[i].replace(/[^A-Z' -]/g, ' ').replace(/\s+/g, ' ').trim();
+      if (!clean || clean.length < 3) continue;
+      parts.push(clean);
+      if (parts.join(' ').split(' ').length >= 5) break;
+    }
+    const name = parts.join(' ').replace(/\s+/g, ' ').trim();
+    // filtra palavras soltas de ruído com 1 letra
+    const words = name.split(' ').filter(w => w.length > 1 || /^[EY]$/.test(w));
+    if (words.length >= 2) out.name = words.join(' ');
+  }
+
+  return (out.name || out.number) ? out : null;
+}
+
+// Interpreta a zona MRZ (ICAO 9303): TD1 (cartões de identificação, 3 linhas
+// de 30) e TD3 (passaportes, 2 linhas de 44).
+function parseMRZ(text) {
+  const lines = text.toUpperCase().split(/\r?\n/)
+    .map(l => l.replace(/\s+/g, '').replace(/[^A-Z0-9<]/g, ''))
+    .filter(l => l.length >= 25 && l.includes('<'));
+  if (!lines.length) return null;
+
+  const cleanName = (part) => part.split('<<').map(seg => seg.replace(/</g, ' ').trim()).filter(Boolean);
+
+  // TD3 — passaporte: 1ª linha "P<PAÍSAPELIDO<<NOMES", 2ª começa pelo nº (9)
+  const p1 = lines.findIndex(l => /^P[A-Z<]/.test(l) && l.includes('<<'));
+  if (p1 !== -1 && lines[p1 + 1]) {
+    const names = cleanName(lines[p1].slice(5));
+    const number = lines[p1 + 1].slice(0, 9).replace(/</g, '');
+    return {
+      type: 'Passaporte',
+      number: number || null,
+      name: names.length >= 2 ? `${names[1]} ${names[0]}` : names[0] || null,
+    };
+  }
+
+  // TD1 — cartão de identificação: 1ª linha "I<"/"ID"/"AC" + nº na posição 5-14,
+  // nomes na 3ª linha "APELIDO<<NOMES"
+  const i1 = lines.findIndex(l => /^[IAC][A-Z<]/.test(l));
+  if (i1 !== -1) {
+    const number = lines[i1].slice(5, 14).replace(/</g, '');
+    const nameLine = lines.slice(i1 + 1).find(l => l.includes('<<') && !/^\d/.test(l) && /^[A-Z<]+$/.test(l));
+    const names = nameLine ? cleanName(nameLine) : [];
+    return {
+      type: 'CC',
+      number: number || null,
+      name: names.length >= 2 ? `${names[1]} ${names[0]}` : names[0] || null,
+    };
+  }
+  return null;
+}
 
 function go(n) {
   $all('.step').forEach(s => s.style.display = 'none');
@@ -154,6 +530,7 @@ async function submitVisit() {
         document_number: $('#v-docnum').value,
         company: $('#v-company').value,
         host_id: selHost.id,
+        document_image: docImage,
       },
     });
     $('#v-summary').innerHTML = `
@@ -170,9 +547,17 @@ async function submitVisit() {
 
 function resetKiosk() {
   clearTimeout(idleTimer);
+  stopDocCamera();
+  docImage = null;
   ['v-name', 'v-docnum', 'v-company', 'v-host-q'].forEach(id => $(`#${id}`).value = '');
   $('#v-doctype').value = 'CC';
   $('#host-list').innerHTML = '';
+  $('#doc-preview').style.display = 'none';
+  $('#doc-cam').style.display = 'none';
+  $('#doc-start').style.display = '';
+  $('#doc-capture').style.display = 'none';
+  $('#doc-retry').style.display = 'none';
+  setDocStatus('Aponte a câmara à página do documento com a zona de leitura (as linhas com <<<).');
   selHost = null;
   $('#btn-confirm').disabled = true;
   go(1);

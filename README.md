@@ -8,7 +8,7 @@ Plataforma integrada para gerir com segurança a entrada e saída de **colaborad
 |---|---|---|
 | Página inicial | `http://localhost:3000/` | Acesso a todos os módulos |
 | Portal do Colaborador | `/portal.html` | O colaborador autentica-se e gera QR Codes de acesso temporários para si mesmo (1h a 3 dias), consulta e revoga os seus passes, e vê as visitas de que é anfitrião |
-| Totem do Visitante | `/totem.html` | Quiosque de auto-registo: o visitante insere nome, documento e empresa, pesquisa e seleciona o anfitrião, e recebe no momento um passe com QR Code (válido 8h, 1 entrada + 1 saída) |
+| Totem do Visitante | `/totem.html` | Quiosque de auto-registo: o visitante **digitaliza o documento de identificação com a câmara** (a zona MRZ é lida por OCR local e o nome/número são pré-preenchidos; a fotografia fica arquivada), pesquisa e seleciona o anfitrião, e recebe no momento um passe com QR Code (válido 8h, 1 entrada + 1 saída) |
 | Scanner da Portaria | `/scanner.html` | Leitura de QR por câmara (ou validação manual), resultado visual e sonoro, e registo de movimentos em tempo real. O mesmo QR serve para entrada e saída: no modo automático a primeira leitura regista a entrada e a seguinte a saída (com forçagem manual opcional) |
 | Administração | `/admin.html` | Estatísticas, registo completo de acessos, gestão de passes (revogação) e gestão de colaboradores (criação/desativação) |
 
@@ -46,7 +46,9 @@ npm start       # arrancar em http://localhost:3000
 
 **Colaborador** — entra no Portal → gera passe temporário (motivo + validade) → apresenta o QR dinâmico no scanner da portaria → entrada registada.
 
-**Visitante** — no totem da receção: insere dados → pesquisa o anfitrião → passe emitido no ecrã com QR dinâmico → passa na portaria → o anfitrião vê no seu portal que o visitante está no edifício.
+**Visitante** — no totem da receção: digitaliza o documento (OCR preenche nome e número automaticamente; a foto fica arquivada) → pesquisa o anfitrião → passe emitido no ecrã → passa na portaria, onde o segurança vê a foto do documento para conferência → o anfitrião vê no seu portal que o visitante está no edifício.
+
+> A leitura automática usa **tesseract.js servido localmente** (sem chamadas a serviços externos) e interpreta a zona MRZ — ICAO 9303, formatos TD1 (cartões de identificação) e TD3 (passaportes). Se a leitura falhar, os campos preenchem-se manualmente e a fotografia fica na mesma arquivada.
 
 **Portaria** — abre o scanner → escolhe Entrada ou Saída → aponta a câmara ao QR → o sistema valida assinatura, validade e estado do passe e regista o movimento.
 

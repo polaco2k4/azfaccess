@@ -100,6 +100,15 @@
   </div>
 </div>
 
+<!-- ============ MODAL DOCUMENTO ============ -->
+<div class="modal-back" id="doc-modal">
+  <div class="modal">
+    <h2 id="doc-title">Documento</h2>
+    <img id="doc-img" alt="Documento digitalizado" style="width:100%; border-radius:10px; margin-top:10px">
+    <div class="mt center"><button class="btn-ghost" onclick="$('#doc-modal').classList.remove('show')">Fechar</button></div>
+  </div>
+</div>
+
 <script src="/js/common.js"></script>
 <script>
 'use strict';
@@ -174,13 +183,22 @@ async function loadPasses() {
   const rows = await api('/api/admin/passes');
   $('#passes-body').innerHTML = rows.length ? rows.map(p => `
     <tr>
-      <td>${esc(p.holder || '—')}${p.host_name ? `<div class="muted">Anfitrião: ${esc(p.host_name)}</div>` : ''}</td>
+      <td>${esc(p.holder || '—')}${p.host_name ? `<div class="muted">Anfitrião: ${esc(p.host_name)}</div>` : ''}
+          ${p.type === 'visitor' && p.document_number ? `<div class="muted">${esc(p.document_type)} n.º ${esc(p.document_number)}</div>` : ''}</td>
       <td>${p.type === 'visitor' ? '<span class="badge info">Visitante</span>' : '<span class="badge muted">Colaborador</span>'}</td>
       <td>${esc(p.purpose)}</td>
       <td>${fmtDate(p.valid_from)}<br><span class="muted">até ${fmtDate(p.valid_until)}</span></td>
       <td>${STATE_BADGE[p.state] || ''}</td>
-      <td>${p.state === 'valid' ? `<button class="btn-sm btn-danger" onclick="revokePass(${p.id})">Revogar</button>` : ''}</td>
+      <td class="row" style="justify-content:flex-end">
+        ${p.has_doc ? `<button class="btn-sm btn-ghost" onclick="viewDoc(${p.visitor_id}, '${esc(p.holder || '')}')">📄 Documento</button>` : ''}
+        ${p.state === 'valid' ? `<button class="btn-sm btn-danger" onclick="revokePass(${p.id})">Revogar</button>` : ''}</td>
     </tr>`).join('') : '<tr><td colspan="6" class="muted">Sem passes emitidos.</td></tr>';
+}
+
+function viewDoc(visitorId, holder) {
+  $('#doc-title').textContent = `Documento — ${holder}`;
+  $('#doc-img').src = `/api/admin/visitor-doc/${visitorId}`;
+  $('#doc-modal').classList.add('show');
 }
 
 async function revokePass(id) {
