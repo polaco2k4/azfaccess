@@ -36,6 +36,7 @@
     <button class="active" data-tab="logs">📜 Registo de acessos</button>
     <button data-tab="passes">🎫 Passes</button>
     <button data-tab="employees">👥 Colaboradores</button>
+    <button data-tab="reports">📊 Relatórios</button>
   </div>
 
   <!-- Logs -->
@@ -70,6 +71,64 @@
       <table>
         <thead><tr><th>Nome</th><th>E-mail</th><th>Departamento</th><th>Perfil</th><th>Estado</th><th></th></tr></thead>
         <tbody id="emp-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Relatórios -->
+  <div class="card tab-pane" id="tab-reports" style="display:none">
+    <h2>Relatórios de acessos</h2>
+    <div class="filters">
+      <div><label>Data de</label><input type="date" id="r-from"></div>
+      <div><label>Data até</label><input type="date" id="r-to"></div>
+      <div><label>Tipo</label>
+        <select id="r-type">
+          <option value="">Todos</option>
+          <option value="employee">Colaborador</option>
+          <option value="visitor">Visitante</option>
+        </select>
+      </div>
+      <div><label>Resultado</label>
+        <select id="r-result">
+          <option value="">Todos</option>
+          <option value="granted">Autorizado</option>
+          <option value="denied">Negado</option>
+        </select>
+      </div>
+      <div><label>Movimento</label>
+        <select id="r-direction">
+          <option value="">Todos</option>
+          <option value="in">Entrada</option>
+          <option value="out">Saída</option>
+        </select>
+      </div>
+      <div><label>Portaria</label><input type="text" id="r-gate" placeholder="Ex.: Portaria Principal"></div>
+      <div class="row">
+        <button class="btn-sm" id="btn-r-filter">Filtrar</button>
+        <button class="btn-sm btn-ghost" id="btn-r-clear">Limpar</button>
+        <button class="btn-sm btn-ghost" id="btn-r-csv">⬇️ Exportar CSV</button>
+      </div>
+    </div>
+
+    <div class="grid grid-3" id="r-stats" style="margin:18px 0"></div>
+
+    <div class="card" style="background:var(--panel-2)">
+      <h3>Evolução diária</h3>
+      <canvas id="report-chart" height="90"></canvas>
+    </div>
+
+    <div class="table-scroll mt">
+      <table>
+        <thead><tr><th>Data</th><th>Total</th><th>Autorizados</th><th>Negados</th></tr></thead>
+        <tbody id="r-days-body"></tbody>
+      </table>
+    </div>
+
+    <h3 class="mt">Registos detalhados</h3>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Data/hora</th><th>Portador</th><th>Tipo</th><th>Movimento</th><th>Portaria</th><th>Resultado</th></tr></thead>
+        <tbody id="r-rows-body"></tbody>
       </table>
     </div>
   </div>
@@ -109,10 +168,13 @@
   </div>
 </div>
 
+<script src="/vendor/chart.js"></script>
 <script src="/js/common.js"></script>
 <script>
 'use strict';
 let me = null;
+let reportChart = null;
+let lastReportRows = [];
 
 async function boot() {
   try {
@@ -137,11 +199,12 @@ function enterDash() {
   $('#view-dash').style.display = '';
   $('#btn-logout').style.display = '';
   $('#who').textContent = me.name;
+  initReportFilters();
   loadAll();
   setInterval(loadStats, 15000);
 }
 
-function loadAll() { loadStats(); loadLogs(); loadPasses(); loadEmployees(); }
+function loadAll() { loadStats(); loadLogs(); loadPasses(); loadEmployees(); loadReports(); }
 
 // ------------------------- tabs -------------------------
 $all('.tabs button').forEach(b => b.onclick = () => {
@@ -163,9 +226,8 @@ async function loadStats() {
 }
 
 // ------------------------- logs -------------------------
-async function loadLogs() {
-  const rows = await api('/api/admin/logs');
-  $('#logs-body').innerHTML = rows.length ? rows.map(l => `
+function logRowHtml(l) {
+  return `
     <tr>
       <td>${fmtDate(l.created_at)}</td>
       <td>${esc(l.holder)}</td>
@@ -175,7 +237,12 @@ async function loadLogs() {
       <td>${l.result === 'granted'
         ? '<span class="badge ok">Autorizado</span>'
         : `<span class="badge bad">Negado</span> <span class="muted">${esc(l.reason)}</span>`}</td>
-    </tr>`).join('') : '<tr><td colspan="6" class="muted">Sem registos de acesso.</td></tr>';
+    </tr>`;
+}
+
+async function loadLogs() {
+  const rows = await api('/api/admin/logs');
+  $('#logs-body').innerHTML = rows.length ? rows.map(logRowHtml).join('') : '<tr><td colspan="6" class="muted">Sem registos de acesso.</td></tr>';
 }
 
 // ------------------------- passes -------------------------
@@ -247,6 +314,94 @@ $('#btn-save-emp').onclick = async () => {
     $('#emp-modal').classList.remove('show');
     loadEmployees(); loadStats();
   } catch (e) { showMsg($('#emp-msg'), e.message); }
+};
+
+// ------------------------- relatórios -------------------------
+function fmtDay(iso) {
+  return new Date(iso + 'T00:00:00').toLocaleDateString('pt-PT', { day: '2-digit', month: '2-digit', year: 'numeric' });
+}
+
+function initReportFilters() {
+  const to = new Date();
+  const from = new Date(to.getTime() - 30 * 24 * 3600 * 1000);
+  const iso = d => d.toISOString().slice(0, 10);
+  $('#r-from').value = iso(from);
+  $('#r-to').value = iso(to);
+  $('#r-type').value = '';
+  $('#r-result').value = '';
+  $('#r-direction').value = '';
+  $('#r-gate').value = '';
+}
+
+async function loadReports() {
+  const params = new URLSearchParams({
+    from: $('#r-from').value,
+    to: $('#r-to').value,
+    type: $('#r-type').value,
+    result: $('#r-result').value,
+    direction: $('#r-direction').value,
+    gate: $('#r-gate').value,
+  });
+  const data = await api(`/api/admin/reports?${params.toString()}`);
+  lastReportRows = data.rows;
+
+  $('#r-stats').innerHTML = `
+    <div class="stat"><div class="n">${data.summary.total}</div><div class="l">Total de registos</div></div>
+    <div class="stat"><div class="n" style="color:var(--ok)">${data.summary.granted}</div><div class="l">Autorizados</div></div>
+    <div class="stat"><div class="n" style="color:var(--bad)">${data.summary.denied}</div><div class="l">Negados</div></div>
+    <div class="stat"><div class="n">${data.summary.unique_visitors}</div><div class="l">Visitantes únicos</div></div>
+    <div class="stat"><div class="n">${data.summary.unique_employees}</div><div class="l">Colaboradores únicos</div></div>`;
+
+  const days = [...data.by_day].reverse(); // ordem cronológica para o gráfico
+  if (reportChart) reportChart.destroy();
+  reportChart = new Chart($('#report-chart'), {
+    type: 'bar',
+    data: {
+      labels: days.map(d => fmtDay(d.date)),
+      datasets: [
+        { label: 'Autorizados', data: days.map(d => d.granted), backgroundColor: '#22c55e' },
+        { label: 'Negados', data: days.map(d => d.denied), backgroundColor: '#ef4444' },
+      ],
+    },
+    options: {
+      responsive: true,
+      scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true, ticks: { precision: 0 } } },
+      plugins: { legend: { labels: { color: '#e8edf7' } } },
+    },
+  });
+
+  $('#r-days-body').innerHTML = data.by_day.length ? data.by_day.map(d => `
+    <tr>
+      <td>${fmtDay(d.date)}</td>
+      <td>${d.total}</td>
+      <td>${d.granted}</td>
+      <td>${d.denied}</td>
+    </tr>`).join('') : '<tr><td colspan="4" class="muted">Sem dados para o período selecionado.</td></tr>';
+
+  $('#r-rows-body').innerHTML = data.rows.length ? data.rows.map(logRowHtml).join('') : '<tr><td colspan="6" class="muted">Sem registos para os filtros selecionados.</td></tr>';
+}
+
+$('#btn-r-filter').onclick = loadReports;
+$('#btn-r-clear').onclick = () => { initReportFilters(); loadReports(); };
+
+$('#btn-r-csv').onclick = () => {
+  const header = ['Data/hora', 'Portador', 'Tipo', 'Movimento', 'Portaria', 'Resultado', 'Motivo'];
+  const csvEsc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const lines = [header.map(csvEsc).join(',')];
+  for (const l of lastReportRows) {
+    lines.push([
+      fmtDate(l.created_at), l.holder,
+      l.type === 'visitor' ? 'Visitante' : l.type === 'employee' ? 'Colaborador' : '',
+      l.direction === 'in' ? 'Entrada' : 'Saída',
+      l.gate, l.result === 'granted' ? 'Autorizado' : 'Negado', l.reason,
+    ].map(csvEsc).join(','));
+  }
+  const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `relatorio-acessos_${$('#r-from').value}_a_${$('#r-to').value}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
 };
 
 boot();
