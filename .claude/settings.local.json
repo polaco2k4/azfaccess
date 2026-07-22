@@ -87,7 +87,13 @@
       "Bash(powershell -NoProfile -Command \"Start-Process 'http://localhost:3000/admin.html'\")",
       "Bash(node --check /tmp/admin_inline.js)",
       "Bash(node --check \"c:\\\\Users\\\\amandio.zumba\\\\Downloads\\\\ACCESS\\\\tmp_admin_inline.js\")",
-      "Bash(rm \"c:\\\\Users\\\\amandio.zumba\\\\Downloads\\\\ACCESS\\\\tmp_admin_inline.js\")"
+      "Bash(rm \"c:\\\\Users\\\\amandio.zumba\\\\Downloads\\\\ACCESS\\\\tmp_admin_inline.js\")",
+      "Bash(curl -s -b /tmp/cookies.txt \"http://localhost:3000/api/admin/visitors\")",
+      "Bash(curl -s -o /dev/null -w \"admin.html: %{http_code}\\\\n\" http://localhost:3000/admin.html)",
+      "Bash(curl -s -o /dev/null -w \"style.css: %{http_code}\\\\n\" http://localhost:3000/css/style.css)",
+      "Bash(node -e \"const d=new Date\\(\\);d.setDate\\(d.getDate\\(\\)-6\\);console.log\\(d.toISOString\\(\\).slice\\(0,10\\)\\)\")",
+      "Bash(node -e \"console.log\\(new Date\\(\\).toISOString\\(\\).slice\\(0,10\\)\\)\")",
+      "Bash(curl -s -b /tmp/cookies.txt 'http://localhost:3000/api/admin/reports?from=__TRACKED_VAR__&to=__TRACKED_VAR__')"
     ]
   }
 }

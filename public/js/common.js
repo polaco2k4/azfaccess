@@ -42,6 +42,15 @@ const STATE_BADGE = {
   used:    '<span class="badge muted">Utilizado</span>',
 };
 
+const VISITOR_STATE_BADGE = {
+  inside:  '<span class="badge info">Dentro do edifício</span>',
+  left:    '<span class="badge ok">Saiu</span>',
+  pending: '<span class="badge warn">Aguarda entrada</span>',
+  expired: '<span class="badge muted">Expirado sem entrada</span>',
+  revoked: '<span class="badge bad">Revogado</span>',
+  no_pass: '<span class="muted">—</span>',
+};
+
 /**
  * Carrega o QR (estático) de um passe para um contentor.
  * O mesmo código é válido durante todo o período de validade do passe.

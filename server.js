@@ -409,7 +409,7 @@ app.post('/api/scan', async (req, res) => {
 function mapLogRow(l) {
   const p = l.pass;
   return {
-    id: l.id, direction: l.direction, result: l.result, reason: l.reason, gate: l.gate, created_at: l.created_at,
+    id: l.id, pass_id: l.pass_id, direction: l.direction, result: l.result, reason: l.reason, gate: l.gate, created_at: l.created_at,
     holder: (p && (p.employee?.name || p.visitor?.name)) || '—',
     type: p ? p.type : null,
   };
@@ -537,6 +537,48 @@ app.post('/api/admin/passes/:id/revoke', requireAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
+app.get('/api/admin/visitors', requireAdmin, async (req, res) => {
+  const { data: rows, error } = await supabaseAdmin
+    .from('visitors')
+    .select(`
+      id, name, company, document_type, document_number, document_image, created_at,
+      host:employees!visitors_host_id_fkey ( name ),
+      passes ( id, status, valid_from, valid_until, access_logs ( direction, result, created_at ) )
+    `)
+    .order('created_at', { ascending: false })
+    .limit(200);
+  if (error) return res.status(500).json({ error: 'Erro ao obter visitantes.' });
+
+  res.json(rows.map(v => {
+    const pass = v.passes?.[0] || null;
+    const granted = (pass?.access_logs || [])
+      .filter(l => l.result === 'granted')
+      .sort((a, b) => a.created_at.localeCompare(b.created_at));
+    const entry = granted.find(l => l.direction === 'in') || null;
+    const exit = granted.find(l => l.direction === 'out') || null;
+    const dwell_minutes = entry && exit ? Math.round((new Date(exit.created_at) - new Date(entry.created_at)) / 60000) : null;
+
+    let state;
+    if (!pass) state = 'no_pass';
+    else if (pass.status === 'revoked') state = 'revoked';
+    else if (entry && exit) state = 'left';
+    else if (entry && !exit) state = 'inside';
+    else state = passWindowState(pass) === 'expired' ? 'expired' : 'pending';
+
+    return {
+      id: v.id, name: v.name, company: v.company,
+      document_type: v.document_type, document_number: v.document_number, has_doc: !!v.document_image,
+      host_name: v.host?.name || null,
+      created_at: v.created_at,
+      entry_at: entry?.created_at || null,
+      exit_at: exit?.created_at || null,
+      dwell_minutes,
+      pass_id: pass?.id ?? null,
+      state,
+    };
+  }));
+});
+
 app.get('/api/admin/logs', requireAdmin, async (req, res) => {
   const { data: rows, error } = await supabaseAdmin
     .from('access_logs')
@@ -561,6 +603,59 @@ function reportBounds(from, to) {
   return { start: start.toISOString(), end: end.toISOString() };
 }
 
+// Tempo de permanência dos visitantes: calculado à parte dos filtros de
+// tipo/resultado/movimento do relatório principal (senão, p.ex. filtrar por
+// "Movimento: Saída" eliminava as entradas e quebrava o pareamento entrada/saída).
+// Respeita apenas o intervalo de datas e a portaria.
+async function computeVisitorDwell(start, end, gate) {
+  let query = supabaseAdmin
+    .from('access_logs')
+    .select('pass_id, direction, created_at, pass:passes!access_logs_pass_id_fkey!inner(type)')
+    .eq('result', 'granted')
+    .eq('pass.type', 'visitor')
+    .gte('created_at', start)
+    .lt('created_at', end)
+    .order('created_at', { ascending: true })
+    .limit(2000);
+  if (String(gate || '').trim()) query = query.ilike('gate', `%${String(gate).trim()}%`);
+
+  const { data, error } = await query;
+  if (error || !data) return { avg_dwell_minutes: null, dwell_by_day: [], byPassId: new Map() };
+
+  const byPass = new Map();
+  for (const r of data) {
+    if (!byPass.has(r.pass_id)) byPass.set(r.pass_id, {});
+    const v = byPass.get(r.pass_id);
+    if (r.direction === 'in' && !v.in) v.in = r.created_at;
+    if (r.direction === 'out' && !v.out) v.out = r.created_at;
+  }
+
+  const completed = [];
+  for (const [passId, v] of byPass) {
+    if (v.in && v.out) {
+      const minutes = (new Date(v.out) - new Date(v.in)) / 60000;
+      if (minutes >= 0) completed.push({ pass_id: passId, minutes, day: v.in.slice(0, 10) });
+    }
+  }
+
+  const avg_dwell_minutes = completed.length
+    ? completed.reduce((s, c) => s + c.minutes, 0) / completed.length
+    : null;
+
+  const byDayMap = {};
+  for (const c of completed) {
+    if (!byDayMap[c.day]) byDayMap[c.day] = { date: c.day, total_minutes: 0, visits: 0 };
+    byDayMap[c.day].total_minutes += c.minutes;
+    byDayMap[c.day].visits++;
+  }
+  const dwell_by_day = Object.values(byDayMap)
+    .map(d => ({ date: d.date, avg_dwell_minutes: d.total_minutes / d.visits, visits: d.visits }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  const byPassId = new Map(completed.map(c => [c.pass_id, c.minutes]));
+  return { avg_dwell_minutes, dwell_by_day, byPassId };
+}
+
 app.get('/api/admin/reports', requireAdmin, async (req, res) => {
   const { from, to, type, result, direction, gate } = req.query;
   const { start, end } = reportBounds(from, to);
@@ -568,11 +663,14 @@ app.get('/api/admin/reports', requireAdmin, async (req, res) => {
   let query = supabaseAdmin
     .from('access_logs')
     .select(`
-      id, direction, result, reason, gate, created_at,
+      id, pass_id, direction, result, reason, gate, created_at,
       pass:passes!access_logs_pass_id_fkey!inner (
         type,
         employee:employees!passes_employee_id_fkey ( id, name ),
-        visitor:visitors!passes_visitor_id_fkey ( id, name )
+        visitor:visitors!passes_visitor_id_fkey (
+          id, name,
+          host:employees!visitors_host_id_fkey ( name )
+        )
       )
     `)
     .gte('created_at', start)
@@ -585,17 +683,26 @@ app.get('/api/admin/reports', requireAdmin, async (req, res) => {
   if (direction === 'in' || direction === 'out') query = query.eq('direction', direction);
   if (String(gate || '').trim()) query = query.ilike('gate', `%${String(gate).trim()}%`);
 
-  const { data: rows, error } = await query;
+  const [{ data: rows, error }, dwell] = await Promise.all([
+    query,
+    computeVisitorDwell(start, end, gate),
+  ]);
   if (error) return res.status(500).json({ error: 'Erro ao gerar relatório.' });
 
   const mapped = rows.map(mapLogRow);
+  for (const r of mapped) {
+    if (r.direction === 'out' && dwell.byPassId.has(r.pass_id)) {
+      r.dwell_minutes = Math.round(dwell.byPassId.get(r.pass_id));
+    }
+  }
 
   const summary = {
     total: mapped.length,
     granted: mapped.filter(r => r.result === 'granted').length,
     denied: mapped.filter(r => r.result === 'denied').length,
-    unique_visitors: new Set(rows.filter(r => r.pass?.type === 'visitor' && r.pass.visitor?.id).map(r => r.pass.visitor.id)).size,
+    visits: new Set(rows.filter(r => r.pass?.type === 'visitor' && r.pass.visitor?.id).map(r => r.pass.visitor.id)).size,
     unique_employees: new Set(rows.filter(r => r.pass?.type === 'employee' && r.pass.employee?.id).map(r => r.pass.employee.id)).size,
+    avg_dwell_minutes: dwell.avg_dwell_minutes,
   };
 
   const byDayMap = {};
@@ -607,7 +714,28 @@ app.get('/api/admin/reports', requireAdmin, async (req, res) => {
   }
   const by_day = Object.values(byDayMap).sort((a, b) => b.date.localeCompare(a.date));
 
-  res.json({ summary, by_day, rows: mapped.slice(0, 500) });
+  const byHourMap = {};
+  for (const r of mapped) {
+    const h = new Date(r.created_at).getHours();
+    if (!byHourMap[h]) byHourMap[h] = { hour: h, total: 0, granted: 0, denied: 0 };
+    byHourMap[h].total++;
+    byHourMap[h][r.result]++;
+  }
+  const by_hour = Array.from({ length: 24 }, (_, h) => byHourMap[h] || { hour: h, total: 0, granted: 0, denied: 0 });
+
+  const hostCounts = {};
+  for (const r of rows) {
+    if (r.pass?.type === 'visitor' && r.direction === 'in' && r.result === 'granted') {
+      const name = r.pass.visitor?.host?.name || 'Sem anfitrião';
+      hostCounts[name] = (hostCounts[name] || 0) + 1;
+    }
+  }
+  const top_hosts = Object.entries(hostCounts)
+    .map(([name, visits]) => ({ name, visits }))
+    .sort((a, b) => b.visits - a.visits)
+    .slice(0, 8);
+
+  res.json({ summary, by_day, by_hour, top_hosts, dwell_by_day: dwell.dwell_by_day, rows: mapped.slice(0, 500) });
 });
 
 // ---------------------------------------------------------------------------

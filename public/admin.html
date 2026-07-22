@@ -29,18 +29,44 @@
 </div>
 
 <!-- ============ DASHBOARD ============ -->
-<div class="wrap" id="view-dash" style="display:none">
-  <div class="grid grid-3" id="stats" style="margin-bottom:20px"></div>
+<div class="wrap wrap-dash" id="view-dash" style="display:none">
+  <div class="layout">
+    <nav class="sidebar">
+      <button class="active" data-tab="dashboard">🏠 Dashboard</button>
+      <button data-tab="logs">📜 Registo de acessos</button>
+      <button data-tab="passes">🎫 Passes</button>
+      <button data-tab="employees">👥 Colaboradores</button>
+      <button data-tab="visitors">🧑‍💼 Visitantes</button>
+      <button data-tab="reports">📊 Relatórios</button>
+    </nav>
 
-  <div class="tabs">
-    <button class="active" data-tab="logs">📜 Registo de acessos</button>
-    <button data-tab="passes">🎫 Passes</button>
-    <button data-tab="employees">👥 Colaboradores</button>
-    <button data-tab="reports">📊 Relatórios</button>
+    <div class="content">
+  <!-- Dashboard -->
+  <div class="card tab-pane" id="tab-dashboard">
+    <h2>Dashboard</h2>
+    <div class="grid grid-3" id="stats"></div>
+    <div class="grid grid-2 mt">
+      <div class="card" style="background:var(--panel-2)">
+        <h3>Evolução dos últimos 7 dias</h3>
+        <canvas id="dashboard-chart" height="200"></canvas>
+      </div>
+      <div class="card" style="background:var(--panel-2)">
+        <h3>Atividade recente</h3>
+        <div id="dash-activity"></div>
+      </div>
+    </div>
+    <div class="card mt" style="background:var(--panel-2)">
+      <h3>Atalhos rápidos</h3>
+      <div class="row">
+        <button class="btn-sm" onclick="dashNewEmployee()">➕ Novo colaborador</button>
+        <button class="btn-sm btn-ghost" onclick="gotoTab('passes')">🎫 Ver passes</button>
+        <button class="btn-sm btn-ghost" onclick="gotoTab('reports')">📊 Ver relatórios</button>
+      </div>
+    </div>
   </div>
 
   <!-- Logs -->
-  <div class="card tab-pane" id="tab-logs">
+  <div class="card tab-pane" id="tab-logs" style="display:none">
     <h2>Registo de acessos (mais recentes primeiro)</h2>
     <div class="table-scroll">
       <table>
@@ -71,6 +97,17 @@
       <table>
         <thead><tr><th>Nome</th><th>E-mail</th><th>Departamento</th><th>Perfil</th><th>Estado</th><th></th></tr></thead>
         <tbody id="emp-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Visitantes -->
+  <div class="card tab-pane" id="tab-visitors" style="display:none">
+    <h2>Visitantes registados</h2>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Nome</th><th>Documento</th><th>Empresa</th><th>Anfitrião</th><th>Entrada</th><th>Saída</th><th>Permanência</th><th>Estado</th><th></th></tr></thead>
+        <tbody id="visitors-body"></tbody>
       </table>
     </div>
   </div>
@@ -117,6 +154,25 @@
       <canvas id="report-chart" height="90"></canvas>
     </div>
 
+    <div class="grid grid-2 mt">
+      <div class="card" style="background:var(--panel-2)">
+        <h3>Autorizados vs. negados</h3>
+        <canvas id="result-chart" height="220"></canvas>
+      </div>
+      <div class="card" style="background:var(--panel-2)">
+        <h3>Distribuição por hora do dia</h3>
+        <canvas id="hour-chart" height="220"></canvas>
+      </div>
+      <div class="card" style="background:var(--panel-2)">
+        <h3>Ranking de anfitriões</h3>
+        <canvas id="host-chart" height="220"></canvas>
+      </div>
+      <div class="card" style="background:var(--panel-2)">
+        <h3>Permanência média por dia</h3>
+        <canvas id="dwell-chart" height="220"></canvas>
+      </div>
+    </div>
+
     <div class="table-scroll mt">
       <table>
         <thead><tr><th>Data</th><th>Total</th><th>Autorizados</th><th>Negados</th></tr></thead>
@@ -127,9 +183,11 @@
     <h3 class="mt">Registos detalhados</h3>
     <div class="table-scroll">
       <table>
-        <thead><tr><th>Data/hora</th><th>Portador</th><th>Tipo</th><th>Movimento</th><th>Portaria</th><th>Resultado</th></tr></thead>
+        <thead><tr><th>Data/hora</th><th>Portador</th><th>Tipo</th><th>Movimento</th><th>Portaria</th><th>Resultado</th><th>Permanência</th></tr></thead>
         <tbody id="r-rows-body"></tbody>
       </table>
+    </div>
+  </div>
     </div>
   </div>
 </div>
@@ -174,6 +232,11 @@
 'use strict';
 let me = null;
 let reportChart = null;
+let resultChart = null;
+let hourChart = null;
+let hostChart = null;
+let dwellChart = null;
+let dashboardChart = null;
 let lastReportRows = [];
 
 async function boot() {
@@ -204,15 +267,73 @@ function enterDash() {
   setInterval(loadStats, 15000);
 }
 
-function loadAll() { loadStats(); loadLogs(); loadPasses(); loadEmployees(); loadReports(); }
+function loadAll() { loadStats(); loadLogs(); loadPasses(); loadEmployees(); loadVisitors(); loadReports(); loadDashboard(); }
 
 // ------------------------- tabs -------------------------
-$all('.tabs button').forEach(b => b.onclick = () => {
-  $all('.tabs button').forEach(x => x.classList.remove('active'));
+$all('.sidebar button').forEach(b => b.onclick = () => {
+  $all('.sidebar button').forEach(x => x.classList.remove('active'));
   b.classList.add('active');
   $all('.tab-pane').forEach(p => p.style.display = 'none');
   $(`#tab-${b.dataset.tab}`).style.display = '';
 });
+
+function gotoTab(tab) {
+  const btn = $(`.sidebar button[data-tab="${tab}"]`);
+  if (btn) btn.click();
+}
+
+function dashNewEmployee() {
+  gotoTab('employees');
+  $('#btn-new-emp').click();
+}
+
+// ------------------------- dashboard -------------------------
+function isoDaysAgo(n) {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return d.toISOString().slice(0, 10);
+}
+
+function dashActivityRow(l) {
+  return `
+    <div class="row" style="justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--line)">
+      <div>
+        <div>${esc(l.holder)} <span class="muted">— ${l.direction === 'in' ? 'Entrada' : 'Saída'}</span></div>
+        <div class="muted">${fmtDate(l.created_at)} · ${esc(l.gate)}</div>
+      </div>
+      <div>${l.result === 'granted' ? '<span class="badge ok">Autorizado</span>' : '<span class="badge bad">Negado</span>'}</div>
+    </div>`;
+}
+
+async function loadDashboard() {
+  const params = new URLSearchParams({ from: isoDaysAgo(6), to: isoDaysAgo(0) });
+  const [logs, report] = await Promise.all([
+    api('/api/admin/logs'),
+    api(`/api/admin/reports?${params.toString()}`),
+  ]);
+
+  $('#dash-activity').innerHTML = logs.length
+    ? logs.slice(0, 8).map(dashActivityRow).join('')
+    : '<p class="muted">Sem atividade recente.</p>';
+
+  const days = [...report.by_day].reverse();
+  if (dashboardChart) dashboardChart.destroy();
+  dashboardChart = new Chart($('#dashboard-chart'), {
+    type: 'line',
+    data: {
+      labels: days.map(d => fmtDay(d.date)),
+      datasets: [
+        { label: 'Autorizados', data: days.map(d => d.granted), borderColor: '#22c55e', backgroundColor: '#22c55e', tension: .25 },
+        { label: 'Negados', data: days.map(d => d.denied), borderColor: '#ef4444', backgroundColor: '#ef4444', tension: .25 },
+      ],
+    },
+    options: {
+      responsive: true,
+      scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+      plugins: { legend: { labels: { color: '#e8edf7' } } },
+    },
+  });
+}
 
 // ------------------------- estatísticas -------------------------
 async function loadStats() {
@@ -271,7 +392,26 @@ function viewDoc(visitorId, holder) {
 async function revokePass(id) {
   if (!confirm('Revogar este passe? O acesso será negado de imediato.')) return;
   await api(`/api/admin/passes/${id}/revoke`, { method: 'POST' });
-  loadPasses(); loadStats();
+  loadPasses(); loadStats(); loadVisitors();
+}
+
+// ------------------------- visitantes -------------------------
+async function loadVisitors() {
+  const rows = await api('/api/admin/visitors');
+  $('#visitors-body').innerHTML = rows.length ? rows.map(v => `
+    <tr>
+      <td>${esc(v.name)}</td>
+      <td>${esc(v.document_type)} n.º ${esc(v.document_number)}</td>
+      <td>${esc(v.company || '—')}</td>
+      <td>${esc(v.host_name || '—')}</td>
+      <td>${v.entry_at ? fmtDate(v.entry_at) : '—'}</td>
+      <td>${v.exit_at ? fmtDate(v.exit_at) : '—'}</td>
+      <td>${v.dwell_minutes != null ? fmtDuration(v.dwell_minutes) : '—'}</td>
+      <td>${VISITOR_STATE_BADGE[v.state] || ''}</td>
+      <td class="row" style="justify-content:flex-end">
+        ${v.has_doc ? `<button class="btn-sm btn-ghost" onclick="viewDoc(${v.id}, '${esc(v.name)}')">📄 Documento</button>` : ''}
+        ${(v.state === 'inside' || v.state === 'pending') && v.pass_id ? `<button class="btn-sm btn-danger" onclick="revokePass(${v.pass_id})">Revogar</button>` : ''}</td>
+    </tr>`).join('') : '<tr><td colspan="9" class="muted">Sem visitantes registados.</td></tr>';
 }
 
 // ------------------------- colaboradores -------------------------
@@ -321,6 +461,29 @@ function fmtDay(iso) {
   return new Date(iso + 'T00:00:00').toLocaleDateString('pt-PT', { day: '2-digit', month: '2-digit', year: 'numeric' });
 }
 
+function fmtDuration(minutes) {
+  if (minutes == null) return '—';
+  const m = Math.round(minutes);
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60), rm = m % 60;
+  return rm ? `${h}h ${rm}min` : `${h}h`;
+}
+
+function reportRowHtml(l) {
+  return `
+    <tr>
+      <td>${fmtDate(l.created_at)}</td>
+      <td>${esc(l.holder)}</td>
+      <td>${l.type === 'visitor' ? '<span class="badge info">Visitante</span>' : l.type === 'employee' ? '<span class="badge muted">Colaborador</span>' : '—'}</td>
+      <td>${l.direction === 'in' ? '⬇️ Entrada' : '⬆️ Saída'}</td>
+      <td>${esc(l.gate)}</td>
+      <td>${l.result === 'granted'
+        ? '<span class="badge ok">Autorizado</span>'
+        : `<span class="badge bad">Negado</span> <span class="muted">${esc(l.reason)}</span>`}</td>
+      <td>${l.dwell_minutes != null ? fmtDuration(l.dwell_minutes) : '—'}</td>
+    </tr>`;
+}
+
 function initReportFilters() {
   const to = new Date();
   const from = new Date(to.getTime() - 30 * 24 * 3600 * 1000);
@@ -349,8 +512,9 @@ async function loadReports() {
     <div class="stat"><div class="n">${data.summary.total}</div><div class="l">Total de registos</div></div>
     <div class="stat"><div class="n" style="color:var(--ok)">${data.summary.granted}</div><div class="l">Autorizados</div></div>
     <div class="stat"><div class="n" style="color:var(--bad)">${data.summary.denied}</div><div class="l">Negados</div></div>
-    <div class="stat"><div class="n">${data.summary.unique_visitors}</div><div class="l">Visitantes únicos</div></div>
-    <div class="stat"><div class="n">${data.summary.unique_employees}</div><div class="l">Colaboradores únicos</div></div>`;
+    <div class="stat"><div class="n">${data.summary.visits}</div><div class="l">Número de visitas</div></div>
+    <div class="stat"><div class="n">${data.summary.unique_employees}</div><div class="l">Colaboradores únicos</div></div>
+    <div class="stat"><div class="n">${fmtDuration(data.summary.avg_dwell_minutes)}</div><div class="l">Permanência média</div></div>`;
 
   const days = [...data.by_day].reverse(); // ordem cronológica para o gráfico
   if (reportChart) reportChart.destroy();
@@ -370,6 +534,62 @@ async function loadReports() {
     },
   });
 
+  if (resultChart) resultChart.destroy();
+  resultChart = new Chart($('#result-chart'), {
+    type: 'doughnut',
+    data: {
+      labels: ['Autorizados', 'Negados'],
+      datasets: [{ data: [data.summary.granted, data.summary.denied], backgroundColor: ['#22c55e', '#ef4444'] }],
+    },
+    options: { responsive: true, plugins: { legend: { labels: { color: '#e8edf7' } } } },
+  });
+
+  if (hourChart) hourChart.destroy();
+  hourChart = new Chart($('#hour-chart'), {
+    type: 'bar',
+    data: {
+      labels: data.by_hour.map(h => `${h.hour}h`),
+      datasets: [
+        { label: 'Autorizados', data: data.by_hour.map(h => h.granted), backgroundColor: '#22c55e' },
+        { label: 'Negados', data: data.by_hour.map(h => h.denied), backgroundColor: '#ef4444' },
+      ],
+    },
+    options: {
+      responsive: true,
+      scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true, ticks: { precision: 0 } } },
+      plugins: { legend: { labels: { color: '#e8edf7' } } },
+    },
+  });
+
+  if (hostChart) hostChart.destroy();
+  hostChart = new Chart($('#host-chart'), {
+    type: 'bar',
+    data: {
+      labels: data.top_hosts.map(h => h.name),
+      datasets: [{ label: 'Visitas', data: data.top_hosts.map(h => h.visits), backgroundColor: '#3b82f6' }],
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      scales: { x: { beginAtZero: true, ticks: { precision: 0 } } },
+      plugins: { legend: { display: false } },
+    },
+  });
+
+  if (dwellChart) dwellChart.destroy();
+  dwellChart = new Chart($('#dwell-chart'), {
+    type: 'line',
+    data: {
+      labels: data.dwell_by_day.map(d => fmtDay(d.date)),
+      datasets: [{ label: 'Permanência média (min)', data: data.dwell_by_day.map(d => Math.round(d.avg_dwell_minutes)), borderColor: '#60a5fa', backgroundColor: '#60a5fa', tension: .25 }],
+    },
+    options: {
+      responsive: true,
+      scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+      plugins: { legend: { labels: { color: '#e8edf7' } } },
+    },
+  });
+
   $('#r-days-body').innerHTML = data.by_day.length ? data.by_day.map(d => `
     <tr>
       <td>${fmtDay(d.date)}</td>
@@ -378,14 +598,14 @@ async function loadReports() {
       <td>${d.denied}</td>
     </tr>`).join('') : '<tr><td colspan="4" class="muted">Sem dados para o período selecionado.</td></tr>';
 
-  $('#r-rows-body').innerHTML = data.rows.length ? data.rows.map(logRowHtml).join('') : '<tr><td colspan="6" class="muted">Sem registos para os filtros selecionados.</td></tr>';
+  $('#r-rows-body').innerHTML = data.rows.length ? data.rows.map(reportRowHtml).join('') : '<tr><td colspan="7" class="muted">Sem registos para os filtros selecionados.</td></tr>';
 }
 
 $('#btn-r-filter').onclick = loadReports;
 $('#btn-r-clear').onclick = () => { initReportFilters(); loadReports(); };
 
 $('#btn-r-csv').onclick = () => {
-  const header = ['Data/hora', 'Portador', 'Tipo', 'Movimento', 'Portaria', 'Resultado', 'Motivo'];
+  const header = ['Data/hora', 'Portador', 'Tipo', 'Movimento', 'Portaria', 'Resultado', 'Motivo', 'Permanência'];
   const csvEsc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
   const lines = [header.map(csvEsc).join(',')];
   for (const l of lastReportRows) {
@@ -394,6 +614,7 @@ $('#btn-r-csv').onclick = () => {
       l.type === 'visitor' ? 'Visitante' : l.type === 'employee' ? 'Colaborador' : '',
       l.direction === 'in' ? 'Entrada' : 'Saída',
       l.gate, l.result === 'granted' ? 'Autorizado' : 'Negado', l.reason,
+      l.dwell_minutes != null ? fmtDuration(l.dwell_minutes) : '',
     ].map(csvEsc).join(','));
   }
   const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
