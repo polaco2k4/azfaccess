@@ -15,7 +15,6 @@ app.use('/vendor/jsqr.js', (req, res) =>
 // OCR local (tesseract.js) para leitura da zona MRZ dos documentos no totem
 app.use('/vendor/tesseract', express.static(path.dirname(require.resolve('tesseract.js/dist/tesseract.min.js'))));
 app.use('/vendor/tesseract-core', express.static(path.dirname(require.resolve('tesseract.js-core/tesseract-core.wasm.js'))));
-app.use('/vendor/tessdata', express.static(path.join(__dirname, 'vendor', 'tessdata')));
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -29,19 +28,21 @@ function getCookie(req, name) {
   return null;
 }
 
+const COOKIE_SECURE = process.env.VERCEL ? '; Secure' : '';
+
 function setAuthCookies(res, session) {
   const atMaxAge = Math.max(60, Math.floor(session.expires_in || 3600));
   const rtMaxAge = 60 * 60 * 24 * 30; // 30 dias — a sessão renova-se sozinha enquanto o refresh token for válido
   res.setHeader('Set-Cookie', [
-    `sb_at=${encodeURIComponent(session.access_token)}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${atMaxAge}`,
-    `sb_rt=${encodeURIComponent(session.refresh_token)}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${rtMaxAge}`,
+    `sb_at=${encodeURIComponent(session.access_token)}; HttpOnly; Path=/; SameSite=Lax${COOKIE_SECURE}; Max-Age=${atMaxAge}`,
+    `sb_rt=${encodeURIComponent(session.refresh_token)}; HttpOnly; Path=/; SameSite=Lax${COOKIE_SECURE}; Max-Age=${rtMaxAge}`,
   ]);
 }
 
 function clearAuthCookies(res) {
   res.setHeader('Set-Cookie', [
-    'sb_at=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0',
-    'sb_rt=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0',
+    `sb_at=; HttpOnly; Path=/; SameSite=Lax${COOKIE_SECURE}; Max-Age=0`,
+    `sb_rt=; HttpOnly; Path=/; SameSite=Lax${COOKIE_SECURE}; Max-Age=0`,
   ]);
 }
 
@@ -552,14 +553,16 @@ app.get('/api/admin/logs', requireAdmin, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-ensureDocsBucket()
-  .catch(e => console.error('Aviso: não foi possível preparar o bucket de Storage:', e.message))
-  .finally(() => {
-    app.listen(PORT, () => {
-      console.log(`\n  Plataforma de Controlo de Acesso a correr em http://localhost:${PORT}\n`);
-      console.log('  Portal do Colaborador : http://localhost:' + PORT + '/portal.html');
-      console.log('  Totem do Visitante    : http://localhost:' + PORT + '/totem.html');
-      console.log('  Scanner da Portaria   : http://localhost:' + PORT + '/scanner.html');
-      console.log('  Administração         : http://localhost:' + PORT + '/admin.html\n');
-    });
+ensureDocsBucket().catch(e => console.error('Aviso: não foi possível preparar o bucket de Storage:', e.message));
+
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`\n  Plataforma de Controlo de Acesso a correr em http://localhost:${PORT}\n`);
+    console.log('  Portal do Colaborador : http://localhost:' + PORT + '/portal.html');
+    console.log('  Totem do Visitante    : http://localhost:' + PORT + '/totem.html');
+    console.log('  Scanner da Portaria   : http://localhost:' + PORT + '/scanner.html');
+    console.log('  Administração         : http://localhost:' + PORT + '/admin.html\n');
   });
+}
+
+module.exports = app;

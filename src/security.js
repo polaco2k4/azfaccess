@@ -1,22 +1,19 @@
 'use strict';
 const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
 
 // ---------------------------------------------------------------------------
-// Segredo do servidor (gerado no primeiro arranque e persistido em data/).
+// Segredo do servidor, lido de PASS_SECRET (variável de ambiente).
 // Usado apenas para assinar o conteúdo do QR Code dos passes — não tem
 // relação com o login dos colaboradores, que passou a ser feito pelo
 // Supabase Auth (ver src/supabaseClient.js e server.js).
 // ---------------------------------------------------------------------------
-const DATA_DIR = path.join(__dirname, '..', 'data');
-const KEY_FILE = path.join(DATA_DIR, 'secret.key');
-
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-if (!fs.existsSync(KEY_FILE)) {
-  fs.writeFileSync(KEY_FILE, crypto.randomBytes(48).toString('hex'), { encoding: 'utf8' });
+if (!process.env.PASS_SECRET) {
+  throw new Error(
+    'Configuração incompleta. Defina PASS_SECRET num ficheiro .env (ver .env.example). ' +
+    'Gere um valor com: node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'hex\'))"'
+  );
 }
-const SECRET = Buffer.from(fs.readFileSync(KEY_FILE, 'utf8').trim(), 'hex');
+const SECRET = Buffer.from(process.env.PASS_SECRET.trim(), 'hex');
 
 const b64url = (buf) => Buffer.from(buf).toString('base64url');
 const hmac = (data) => crypto.createHmac('sha256', SECRET).update(data).digest('base64url');
