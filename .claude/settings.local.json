@@ -27,7 +27,29 @@
       "PowerShell($env:Path = \"C:\\\\Program Files\\\\nodejs;$env:Path\"; node \"C:\\\\Users\\\\AMANDI~1.ZUM\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-amandio-zumba-Downloads-ACCESS\\\\6572ba0b-f13b-45be-a293-d46b6e9bcfc6\\\\scratchpad\\\\test-parser.js\")",
       "PowerShell($env:Path = \"C:\\\\Program Files\\\\nodejs;$env:Path\"; node \"C:\\\\Users\\\\AMANDI~1.ZUM\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-amandio-zumba-Downloads-ACCESS\\\\6572ba0b-f13b-45be-a293-d46b6e9bcfc6\\\\scratchpad\\\\test-optim.js\"; node \"C:\\\\Users\\\\AMANDI~1.ZUM\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-amandio-zumba-Downloads-ACCESS\\\\6572ba0b-f13b-45be-a293-d46b6e9bcfc6\\\\scratchpad\\\\cleanup.js\")",
       "PowerShell($env:Path = \"C:\\\\Program Files\\\\nodejs;$env:Path\"; node \"C:\\\\Users\\\\AMANDI~1.ZUM\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-amandio-zumba-Downloads-ACCESS\\\\6572ba0b-f13b-45be-a293-d46b6e9bcfc6\\\\scratchpad\\\\test-fuzzy.js\")",
-      "PowerShell($env:Path = \"C:\\\\Program Files\\\\nodejs;$env:Path\"; node \"C:\\\\Users\\\\AMANDI~1.ZUM\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-amandio-zumba-Downloads-ACCESS\\\\6572ba0b-f13b-45be-a293-d46b6e9bcfc6\\\\scratchpad\\\\check-syntax.js\")"
+      "PowerShell($env:Path = \"C:\\\\Program Files\\\\nodejs;$env:Path\"; node \"C:\\\\Users\\\\AMANDI~1.ZUM\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-amandio-zumba-Downloads-ACCESS\\\\6572ba0b-f13b-45be-a293-d46b6e9bcfc6\\\\scratchpad\\\\check-syntax.js\")",
+      "Bash(npm view *)",
+      "Bash(npm install *)",
+      "Bash(timeout 5 node server.js)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(git rm *)",
+      "Bash(node src/seed.js)",
+      "Bash(node server.js)",
+      "Bash(echo \"PID: $!\")",
+      "Read(//tmp/**)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000/)",
+      "Bash(netstat -ano)",
+      "Bash(powershell -Command \"Get-Process -Id 24336 | Select-Object Id,ProcessName,Path,StartTime\")",
+      "Bash(PORT=3011 node server.js)",
+      "Bash(rm -f /tmp/admin_cookies.txt)",
+      "Bash(curl -s -c /tmp/admin_cookies.txt -X POST http://localhost:3011/api/auth/login -H 'Content-Type: application/json' -d '{\"email\":\"admin@empresa.com\",\"password\":\"admin123\"}')",
+      "Bash(curl -s -b /tmp/admin_cookies.txt http://localhost:3011/api/auth/me)",
+      "Bash(node -e ' *)",
+      "Bash(kill 1413)",
+      "Bash(taskkill //F //PID 14396)",
+      "Bash(taskkill //F //PID 17780)",
+      "Bash(npm start *)",
+      "Bash(taskkill //F //PID 24336)"
     ]
   }
 }

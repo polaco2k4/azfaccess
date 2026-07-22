@@ -8,6 +8,8 @@
     "seed": "node src/seed.js"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.110.7",
+    "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "jsqr": "^1.4.0",
     "qrcode": "^1.5.4",

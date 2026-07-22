@@ -19,18 +19,24 @@ Plataforma integrada para gerir com segurança a entrada e saída de **colaborad
 - **Regras de utilização**: passe de **visitante** vale exatamente **1 entrada + 1 saída** (leituras adicionais são negadas e registadas); passe de **colaborador** permite **entradas/saídas ilimitadas** dentro da validade.
 - Qualquer adulteração do token invalida a assinatura e o acesso é negado (e registado).
 - Passes podem ser **revogados** a qualquer momento pelo próprio colaborador ou pelo administrador, com efeito imediato.
-- Palavras-passe guardadas com **scrypt** + salt; sessões via cookie `HttpOnly` assinado (12h).
-- Todas as tentativas de acesso — autorizadas e negadas, com o motivo — ficam no registo de auditoria.
+- Login e sessões dos colaboradores são geridos pelo **Supabase Auth** (e-mail + palavra-passe); as fotografias dos documentos ficam no **Supabase Storage** (bucket privado, acesso por URL assinada e temporária).
+- Todas as tentativas de acesso — autorizadas e negadas, com o motivo — ficam no registo de auditoria (Postgres, no Supabase).
 
 ## Como executar
 
+1. Crie um projeto em [supabase.com](https://supabase.com) (ou use um já existente).
+2. Em **SQL Editor**, execute o conteúdo de [`supabase/schema.sql`](supabase/schema.sql) para criar as tabelas (`employees`, `visitors`, `passes`, `access_logs`).
+3. Em **Project Settings → API**, copie a `Project URL`, a chave `anon` e a chave `service_role`.
+4. Copie `.env.example` para `.env` e preencha `SUPABASE_URL`, `SUPABASE_ANON_KEY` e `SUPABASE_SERVICE_ROLE_KEY`.
+
 ```bash
-npm install     # instalar dependências (express, qrcode, jsqr)
-npm run seed    # criar contas de demonstração
+npm install     # instalar dependências (express, qrcode, jsqr, @supabase/supabase-js)
+npm run seed    # criar contas de demonstração no Supabase Auth + tabela employees
 npm start       # arrancar em http://localhost:3000
 ```
 
-> Requer Node.js 22.5+ (usa o módulo nativo `node:sqlite`). A base de dados é criada automaticamente em `data/access.db`.
+> O bucket de Storage `visitor-docs` (privado) é criado automaticamente no arranque do servidor, caso não exista.
+> A `service_role key` tem acesso total à base de dados e nunca deve ser exposta ao browser — é usada apenas no backend.
 
 ## Contas de demonstração
 
@@ -55,10 +61,11 @@ npm start       # arrancar em http://localhost:3000
 ## Estrutura
 
 ```
-server.js            # API Express + rotas
-src/db.js            # esquema SQLite (node:sqlite)
-src/security.js      # HMAC, scrypt, sessões e tokens de passe
-src/seed.js          # contas de demonstração
-public/              # frontends (portal, totem, scanner, admin)
-data/                # base de dados + segredo (criados no arranque)
+server.js               # API Express + rotas
+src/supabaseClient.js   # clientes Supabase (admin/service_role e anon) + bucket de Storage
+src/security.js         # HMAC e tokens assinados do QR do passe
+src/seed.js             # contas de demonstração (Supabase Auth + tabela employees)
+supabase/schema.sql     # esquema Postgres a executar no projeto Supabase
+public/                 # frontends (portal, totem, scanner, admin)
+data/                   # segredo local do HMAC (data/secret.key, criado no arranque)
 ```

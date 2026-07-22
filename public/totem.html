@@ -513,7 +513,7 @@ $('#v-host-q').addEventListener('input', () => {
     $all('.host-item').forEach(el => el.onclick = () => {
       $all('.host-item').forEach(x => x.classList.remove('sel'));
       el.classList.add('sel');
-      selHost = { id: Number(el.dataset.id), name: el.dataset.name };
+      selHost = { id: el.dataset.id, name: el.dataset.name };
       $('#btn-confirm').disabled = false;
     });
   }, 250);

@@ -217,7 +217,7 @@ async function loadEmployees() {
       <td>${esc(e.department || '—')}</td>
       <td>${e.role === 'admin' ? '<span class="badge warn">Admin</span>' : 'Colaborador'}</td>
       <td>${e.active ? '<span class="badge ok">Ativo</span>' : '<span class="badge bad">Inativo</span>'}</td>
-      <td>${e.id !== me.id ? `<button class="btn-sm btn-ghost" onclick="toggleEmp(${e.id})">${e.active ? 'Desativar' : 'Reativar'}</button>` : '<span class="muted">(a sua conta)</span>'}</td>
+      <td>${e.id !== me.id ? `<button class="btn-sm btn-ghost" onclick="toggleEmp('${e.id}')">${e.active ? 'Desativar' : 'Reativar'}</button>` : '<span class="muted">(a sua conta)</span>'}</td>
     </tr>`).join('');
 }
 

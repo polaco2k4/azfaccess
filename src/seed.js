@@ -1,7 +1,7 @@
 'use strict';
-// Popula a base de dados com contas de demonstração (idempotente).
-const db = require('./db');
-const sec = require('./security');
+// Popula o Supabase com contas de demonstração (idempotente).
+// Cria o utilizador no Supabase Auth e o respetivo perfil em public.employees.
+const { supabaseAdmin } = require('./supabaseClient');
 
 const users = [
   ['Administrador do Sistema', 'admin@empresa.com',  'admin123',  'Segurança',        'admin'],
@@ -11,21 +11,45 @@ const users = [
   ['Diogo Santos',             'diogo@empresa.com',  'diogo123',  'Comercial',        'employee'],
 ];
 
-const insert = db.prepare(`
-  INSERT INTO employees (name, email, password_hash, department, role)
-  VALUES (?, ?, ?, ?, ?)
-`);
-const exists = db.prepare('SELECT 1 FROM employees WHERE email = ?');
+async function main() {
+  let created = 0;
+  for (const [name, email, pwd, dept, role] of users) {
+    const { data: existing } = await supabaseAdmin.from('employees').select('id').eq('email', email).maybeSingle();
+    if (existing) continue;
 
-let created = 0;
-for (const [name, email, pwd, dept, role] of users) {
-  if (exists.get(email)) continue;
-  insert.run(name, email, sec.hashPassword(pwd), dept, role);
-  created++;
+    const { data: authUser, error: authErr } = await supabaseAdmin.auth.admin.createUser({
+      email,
+      password: pwd,
+      email_confirm: true,
+    });
+    if (authErr) {
+      console.error(`Falha ao criar utilizador Auth para ${email}:`, authErr.message);
+      continue;
+    }
+
+    const { error: dbErr } = await supabaseAdmin.from('employees').insert({
+      id: authUser.user.id,
+      name,
+      email,
+      department: dept,
+      role,
+    });
+    if (dbErr) {
+      console.error(`Falha ao criar perfil para ${email}:`, dbErr.message);
+      await supabaseAdmin.auth.admin.deleteUser(authUser.user.id).catch(() => {});
+      continue;
+    }
+    created++;
+  }
+
+  console.log(created ? `Criadas ${created} contas de demonstração.` : 'Contas de demonstração já existem.');
+  console.log('\nCredenciais:');
+  for (const [name, email, pwd, , role] of users) {
+    console.log(`  ${role === 'admin' ? '[ADMIN]      ' : '[COLABORADOR]'} ${email} / ${pwd}  (${name})`);
+  }
 }
 
-console.log(created ? `Criadas ${created} contas de demonstração.` : 'Contas de demonstração já existem.');
-console.log('\nCredenciais:');
-for (const [name, email, pwd, , role] of users) {
-  console.log(`  ${role === 'admin' ? '[ADMIN]      ' : '[COLABORADOR]'} ${email} / ${pwd}  (${name})`);
-}
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});

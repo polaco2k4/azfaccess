@@ -1,16 +1,12 @@
 'use strict';
 const path = require('path');
-const fs = require('fs');
 const express = require('express');
 const QRCode = require('qrcode');
-const db = require('./src/db');
+const { supabaseAdmin, supabaseAuth, DOCS_BUCKET, ensureDocsBucket } = require('./src/supabaseClient');
 const sec = require('./src/security');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-
-const DOCS_DIR = path.join(__dirname, 'data', 'docs');
-if (!fs.existsSync(DOCS_DIR)) fs.mkdirSync(DOCS_DIR, { recursive: true });
 
 app.use(express.json({ limit: '8mb' })); // fotografias de documentos em base64
 app.use(express.static(path.join(__dirname, 'public')));
@@ -33,17 +29,57 @@ function getCookie(req, name) {
   return null;
 }
 
-function currentUser(req) {
-  const uid = sec.readSession(getCookie(req, 'sid'));
-  if (!uid) return null;
-  return db.prepare('SELECT id, name, email, department, role, active FROM employees WHERE id = ? AND active = 1').get(uid) || null;
+function setAuthCookies(res, session) {
+  const atMaxAge = Math.max(60, Math.floor(session.expires_in || 3600));
+  const rtMaxAge = 60 * 60 * 24 * 30; // 30 dias — a sessão renova-se sozinha enquanto o refresh token for válido
+  res.setHeader('Set-Cookie', [
+    `sb_at=${encodeURIComponent(session.access_token)}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${atMaxAge}`,
+    `sb_rt=${encodeURIComponent(session.refresh_token)}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${rtMaxAge}`,
+  ]);
 }
 
-function requireAuth(req, res, next) {
-  const user = currentUser(req);
-  if (!user) return res.status(401).json({ error: 'Sessão inválida. Inicie sessão novamente.' });
-  req.user = user;
-  next();
+function clearAuthCookies(res) {
+  res.setHeader('Set-Cookie', [
+    'sb_at=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0',
+    'sb_rt=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0',
+  ]);
+}
+
+// Autentica pelo cookie sb_at (access token do Supabase Auth); se estiver
+// expirado tenta renovar com sb_rt e emite novos cookies. O perfil de
+// aplicação (nome, departamento, perfil, estado) vive em public.employees.
+async function requireAuth(req, res, next) {
+  const invalid = () => res.status(401).json({ error: 'Sessão inválida. Inicie sessão novamente.' });
+  try {
+    const at = getCookie(req, 'sb_at');
+    const rt = getCookie(req, 'sb_rt');
+    if (!at) return invalid();
+
+    let userId = null;
+    const { data: got } = await supabaseAuth.auth.getUser(at);
+    if (got && got.user) {
+      userId = got.user.id;
+    } else if (rt) {
+      const { data: refreshed, error: rErr } = await supabaseAuth.auth.refreshSession({ refresh_token: rt });
+      if (rErr || !refreshed.session) return invalid();
+      setAuthCookies(res, refreshed.session);
+      userId = refreshed.user.id;
+    } else {
+      return invalid();
+    }
+
+    const { data: profile } = await supabaseAdmin
+      .from('employees')
+      .select('id, name, email, department, role, active')
+      .eq('id', userId)
+      .eq('active', true)
+      .maybeSingle();
+    if (!profile) return invalid();
+    req.user = profile;
+    next();
+  } catch {
+    invalid();
+  }
 }
 
 function requireAdmin(req, res, next) {
@@ -63,26 +99,46 @@ function passWindowState(pass) {
   return 'valid';
 }
 
+function todayBounds() {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const end = new Date(start.getTime() + 24 * 3600 * 1000);
+  return { start: start.toISOString(), end: end.toISOString() };
+}
+
 async function qrDataUrl(text) {
   return QRCode.toDataURL(text, { errorCorrectionLevel: 'M', margin: 2, width: 340 });
 }
 
+async function signedDocUrl(storagePath) {
+  if (!storagePath) return null;
+  const { data, error } = await supabaseAdmin.storage.from(DOCS_BUCKET).createSignedUrl(storagePath, 60);
+  return error ? null : data.signedUrl;
+}
+
 // ---------------------------------------------------------------------------
-// Autenticação (colaboradores e administradores)
+// Autenticação (colaboradores e administradores) — via Supabase Auth
 // ---------------------------------------------------------------------------
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body || {};
-  const user = db.prepare('SELECT * FROM employees WHERE email = ? AND active = 1').get(String(email || '').trim().toLowerCase());
-  if (!user || !sec.verifyPassword(String(password || ''), user.password_hash)) {
-    return res.status(401).json({ error: 'Credenciais inválidas.' });
-  }
-  const token = sec.createSession(user.id);
-  res.setHeader('Set-Cookie', `sid=${encodeURIComponent(token)}; HttpOnly; Path=/; SameSite=Lax; Max-Age=43200`);
-  res.json({ id: user.id, name: user.name, email: user.email, department: user.department, role: user.role });
+  const emailNorm = String(email || '').trim().toLowerCase();
+
+  const { data, error } = await supabaseAuth.auth.signInWithPassword({ email: emailNorm, password: String(password || '') });
+  if (error || !data.session) return res.status(401).json({ error: 'Credenciais inválidas.' });
+
+  const { data: profile } = await supabaseAdmin
+    .from('employees')
+    .select('id, name, email, department, role, active')
+    .eq('id', data.user.id)
+    .maybeSingle();
+  if (!profile || !profile.active) return res.status(401).json({ error: 'Credenciais inválidas.' });
+
+  setAuthCookies(res, data.session);
+  res.json({ id: profile.id, name: profile.name, email: profile.email, department: profile.department, role: profile.role });
 });
 
 app.post('/api/auth/logout', (req, res) => {
-  res.setHeader('Set-Cookie', 'sid=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0');
+  clearAuthCookies(res);
   res.json({ ok: true });
 });
 
@@ -91,46 +147,77 @@ app.get('/api/auth/me', requireAuth, (req, res) => res.json(req.user));
 // ---------------------------------------------------------------------------
 // Portal do Colaborador — passes temporários para o próprio
 // ---------------------------------------------------------------------------
-app.post('/api/passes', requireAuth, (req, res) => {
+app.post('/api/passes', requireAuth, async (req, res) => {
   const { purpose, hours } = req.body || {};
   const h = Math.min(Math.max(Number(hours) || 8, 1), 24 * 7);
   const from = new Date();
   const until = new Date(from.getTime() + h * 3600 * 1000);
   const code = sec.newPassCode();
-  const info = db.prepare(`
-    INSERT INTO passes (code, type, employee_id, purpose, valid_from, valid_until)
-    VALUES (?, 'employee', ?, ?, ?, ?)
-  `).run(code, req.user.id, String(purpose || 'Acesso temporário').slice(0, 200), from.toISOString(), until.toISOString());
-  res.json({ id: Number(info.lastInsertRowid), code, valid_from: from.toISOString(), valid_until: until.toISOString() });
+
+  const { data, error } = await supabaseAdmin.from('passes').insert({
+    code,
+    type: 'employee',
+    employee_id: req.user.id,
+    purpose: String(purpose || 'Acesso temporário').slice(0, 200),
+    valid_from: from.toISOString(),
+    valid_until: until.toISOString(),
+  }).select('id').single();
+  if (error) return res.status(500).json({ error: 'Erro ao criar passe.' });
+
+  res.json({ id: data.id, code, valid_from: from.toISOString(), valid_until: until.toISOString() });
 });
 
-app.get('/api/passes/mine', requireAuth, (req, res) => {
-  const rows = db.prepare(`
-    SELECT id, code, purpose, valid_from, valid_until, status, created_at
-    FROM passes WHERE employee_id = ? AND type = 'employee'
-    ORDER BY created_at DESC LIMIT 50
-  `).all(req.user.id);
+app.get('/api/passes/mine', requireAuth, async (req, res) => {
+  const { data: rows, error } = await supabaseAdmin
+    .from('passes')
+    .select('id, code, purpose, valid_from, valid_until, status, created_at')
+    .eq('employee_id', req.user.id)
+    .eq('type', 'employee')
+    .order('created_at', { ascending: false })
+    .limit(50);
+  if (error) return res.status(500).json({ error: 'Erro ao obter passes.' });
   res.json(rows.map(r => ({ ...r, state: passWindowState(r) })));
 });
 
-app.post('/api/passes/mine/:id/revoke', requireAuth, (req, res) => {
-  const info = db.prepare(`UPDATE passes SET status = 'revoked' WHERE id = ? AND employee_id = ?`).run(Number(req.params.id), req.user.id);
-  if (!info.changes) return res.status(404).json({ error: 'Passe não encontrado.' });
+app.post('/api/passes/mine/:id/revoke', requireAuth, async (req, res) => {
+  const { data, error } = await supabaseAdmin
+    .from('passes')
+    .update({ status: 'revoked' })
+    .eq('id', Number(req.params.id))
+    .eq('employee_id', req.user.id)
+    .select('id');
+  if (error) return res.status(500).json({ error: 'Erro ao revogar passe.' });
+  if (!data.length) return res.status(404).json({ error: 'Passe não encontrado.' });
   res.json({ ok: true });
 });
 
 // Visitas em que o colaborador é anfitrião
-app.get('/api/host/visits', requireAuth, (req, res) => {
-  const rows = db.prepare(`
-    SELECT v.id, v.name, v.company, v.document_type, v.document_number, v.created_at,
-           p.id AS pass_id, p.status, p.valid_from, p.valid_until,
-           (SELECT l.direction FROM access_logs l WHERE l.pass_id = p.id AND l.result = 'granted' ORDER BY l.id DESC LIMIT 1) AS last_move,
-           (SELECT COUNT(*) FROM access_logs l WHERE l.pass_id = p.id AND l.direction = 'out' AND l.result = 'granted') AS outs
-    FROM visitors v JOIN passes p ON p.visitor_id = v.id
-    WHERE v.host_id = ?
-    ORDER BY v.created_at DESC LIMIT 50
-  `).all(req.user.id);
-  res.json(rows.map(r => ({ ...r, state: r.outs >= 1 ? 'used' : passWindowState(r) })));
+app.get('/api/host/visits', requireAuth, async (req, res) => {
+  const { data: rows, error } = await supabaseAdmin
+    .from('visitors')
+    .select(`
+      id, name, company, document_type, document_number, created_at,
+      passes ( id, status, valid_from, valid_until, access_logs ( id, direction, result ) )
+    `)
+    .eq('host_id', req.user.id)
+    .order('created_at', { ascending: false })
+    .limit(50);
+  if (error) return res.status(500).json({ error: 'Erro ao obter visitas.' });
+
+  const out = rows.filter(v => v.passes && v.passes.length).map(v => {
+    const p = v.passes[0];
+    const granted = p.access_logs.filter(l => l.result === 'granted');
+    const outs = granted.filter(l => l.direction === 'out').length;
+    const state = outs >= 1 ? 'used' : passWindowState(p);
+    return {
+      id: v.id, name: v.name, company: v.company, document_type: v.document_type,
+      document_number: v.document_number, created_at: v.created_at,
+      pass_id: p.id, status: p.status, valid_from: p.valid_from, valid_until: p.valid_until,
+      last_move: granted.length ? granted[granted.length - 1].direction : null,
+      outs, state,
+    };
+  });
+  res.json(out);
 });
 
 // ---------------------------------------------------------------------------
@@ -139,7 +226,7 @@ app.get('/api/host/visits', requireAuth, (req, res) => {
 // do passe é a credencial de obtenção.
 // ---------------------------------------------------------------------------
 app.get('/api/qr/:code', async (req, res) => {
-  const pass = db.prepare('SELECT * FROM passes WHERE code = ?').get(req.params.code);
+  const { data: pass } = await supabaseAdmin.from('passes').select('*').eq('code', req.params.code).maybeSingle();
   if (!pass) return res.status(404).json({ error: 'Passe não encontrado.' });
   const state = passWindowState(pass);
   if (state === 'revoked') return res.status(410).json({ error: 'Este passe foi revogado.' });
@@ -156,43 +243,48 @@ app.get('/api/qr/:code', async (req, res) => {
 // ---------------------------------------------------------------------------
 // Totem de Auto-Serviço do Visitante (endpoints públicos do quiosque)
 // ---------------------------------------------------------------------------
-app.get('/api/totem/hosts', (req, res) => {
-  const q = `%${String(req.query.q || '').trim()}%`;
-  if (q.length < 4) return res.json([]); // exige pelo menos 2 caracteres
-  const rows = db.prepare(`
-    SELECT id, name, department FROM employees
-    WHERE active = 1 AND name LIKE ? ORDER BY name LIMIT 8
-  `).all(q);
+app.get('/api/totem/hosts', async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  if (q.length < 2) return res.json([]); // exige pelo menos 2 caracteres
+  const { data: rows, error } = await supabaseAdmin
+    .from('employees')
+    .select('id, name, department')
+    .eq('active', true)
+    .ilike('name', `%${q}%`)
+    .order('name')
+    .limit(8);
+  if (error) return res.status(500).json({ error: 'Erro ao pesquisar colaboradores.' });
   res.json(rows);
 });
 
-app.post('/api/totem/checkin', (req, res) => {
+app.post('/api/totem/checkin', async (req, res) => {
   const { name, document_type, document_number, company, host_id, document_image } = req.body || {};
   if (!String(name || '').trim()) return res.status(400).json({ error: 'Indique o seu nome completo.' });
   if (!String(document_number || '').trim()) return res.status(400).json({ error: 'Indique o número do documento.' });
-  const host = db.prepare('SELECT id, name, department FROM employees WHERE id = ? AND active = 1').get(Number(host_id));
+
+  const { data: host } = await supabaseAdmin
+    .from('employees').select('id, name, department').eq('id', String(host_id || '')).eq('active', true).maybeSingle();
   if (!host) return res.status(400).json({ error: 'Selecione o anfitrião que vai visitar.' });
 
-  const vInfo = db.prepare(`
-    INSERT INTO visitors (name, document_type, document_number, company, host_id)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(
-    String(name).trim().slice(0, 120),
-    ['BI', 'CC', 'Passaporte', 'Outro'].includes(document_type) ? document_type : 'Outro',
-    String(document_number).trim().slice(0, 40),
-    String(company || '').trim().slice(0, 120),
-    host.id
-  );
-  const visitorId = Number(vInfo.lastInsertRowid);
+  const { data: visitor, error: vErr } = await supabaseAdmin.from('visitors').insert({
+    name: String(name).trim().slice(0, 120),
+    document_type: ['BI', 'CC', 'Passaporte', 'Outro'].includes(document_type) ? document_type : 'Outro',
+    document_number: String(document_number).trim().slice(0, 40),
+    company: String(company || '').trim().slice(0, 120),
+    host_id: host.id,
+  }).select('id').single();
+  if (vErr) return res.status(500).json({ error: 'Erro ao registar visitante.' });
+  const visitorId = visitor.id;
 
-  // fotografia do documento digitalizada no totem (JPEG em data-URL)
+  // fotografia do documento digitalizada no totem (JPEG em data-URL) -> Supabase Storage
   if (typeof document_image === 'string' && document_image.startsWith('data:image/jpeg;base64,')) {
     try {
       const jpeg = Buffer.from(document_image.slice('data:image/jpeg;base64,'.length), 'base64');
       if (jpeg.length > 0 && jpeg.length <= 5 * 1024 * 1024) {
-        const file = `v${visitorId}.jpg`;
-        fs.writeFileSync(path.join(DOCS_DIR, file), jpeg);
-        db.prepare('UPDATE visitors SET document_image = ? WHERE id = ?').run(file, visitorId);
+        const filePath = `v${visitorId}.jpg`;
+        const { error: upErr } = await supabaseAdmin.storage.from(DOCS_BUCKET)
+          .upload(filePath, jpeg, { contentType: 'image/jpeg', upsert: true });
+        if (!upErr) await supabaseAdmin.from('visitors').update({ document_image: filePath }).eq('id', visitorId);
       }
     } catch { /* documento fica sem imagem; o registo manual continua válido */ }
   }
@@ -200,35 +292,34 @@ app.post('/api/totem/checkin', (req, res) => {
   const from = new Date();
   const until = new Date(from.getTime() + 8 * 3600 * 1000); // passe de visitante válido 8h
   const code = sec.newPassCode();
-  const pInfo = db.prepare(`
-    INSERT INTO passes (code, type, visitor_id, purpose, valid_from, valid_until)
-    VALUES (?, 'visitor', ?, ?, ?, ?)
-  `).run(code, visitorId, `Visita a ${host.name}`, from.toISOString(), until.toISOString());
+  const { data: pass, error: pErr } = await supabaseAdmin.from('passes').insert({
+    code, type: 'visitor', visitor_id: visitorId, purpose: `Visita a ${host.name}`,
+    valid_from: from.toISOString(), valid_until: until.toISOString(),
+  }).select('id').single();
+  if (pErr) return res.status(500).json({ error: 'Erro ao emitir passe.' });
 
-  res.json({
-    pass_id: Number(pInfo.lastInsertRowid),
-    code,
-    host: host.name,
-    valid_until: until.toISOString(),
-  });
+  res.json({ pass_id: pass.id, code, host: host.name, valid_until: until.toISOString() });
 });
 
 // Fotografia do documento — acessível pela portaria através do código opaco
 // (UUID) do passe, que só é conhecido após uma leitura de QR válida.
-app.get('/api/visitor-doc/:passCode', (req, res) => {
-  const row = db.prepare(`
-    SELECT v.document_image FROM passes p
-    JOIN visitors v ON v.id = p.visitor_id
-    WHERE p.code = ? AND p.type = 'visitor'
-  `).get(req.params.passCode);
-  if (!row || !row.document_image) return res.status(404).json({ error: 'Sem documento digitalizado.' });
-  res.sendFile(path.join(DOCS_DIR, path.basename(row.document_image)));
+app.get('/api/visitor-doc/:passCode', async (req, res) => {
+  const { data: row } = await supabaseAdmin
+    .from('passes')
+    .select('visitor:visitors!passes_visitor_id_fkey ( document_image )')
+    .eq('code', req.params.passCode)
+    .eq('type', 'visitor')
+    .maybeSingle();
+  const url = row && row.visitor ? await signedDocUrl(row.visitor.document_image) : null;
+  if (!url) return res.status(404).json({ error: 'Sem documento digitalizado.' });
+  res.redirect(url);
 });
 
-app.get('/api/admin/visitor-doc/:visitorId', requireAdmin, (req, res) => {
-  const row = db.prepare('SELECT document_image FROM visitors WHERE id = ?').get(Number(req.params.visitorId));
-  if (!row || !row.document_image) return res.status(404).json({ error: 'Sem documento digitalizado.' });
-  res.sendFile(path.join(DOCS_DIR, path.basename(row.document_image)));
+app.get('/api/admin/visitor-doc/:visitorId', requireAdmin, async (req, res) => {
+  const { data: row } = await supabaseAdmin.from('visitors').select('document_image').eq('id', Number(req.params.visitorId)).maybeSingle();
+  const url = row ? await signedDocUrl(row.document_image) : null;
+  if (!url) return res.status(404).json({ error: 'Sem documento digitalizado.' });
+  res.redirect(url);
 });
 
 // ---------------------------------------------------------------------------
@@ -240,16 +331,15 @@ app.post('/api/scan', async (req, res) => {
   let dir = direction === 'out' ? 'out' : direction === 'in' ? 'in' : null;
   const gateName = String(gate || 'Portaria Principal').slice(0, 60);
 
-  const deny = (reason, passId = null) => {
-    db.prepare(`INSERT INTO access_logs (pass_id, direction, result, reason, gate) VALUES (?, ?, 'denied', ?, ?)`)
-      .run(passId, dir || 'in', reason, gateName);
+  const deny = async (reason, passId = null) => {
+    await supabaseAdmin.from('access_logs').insert({ pass_id: passId, direction: dir || 'in', result: 'denied', reason, gate: gateName });
     return res.status(403).json({ result: 'denied', reason });
   };
 
   const parsed = sec.readPassToken(String(token || ''));
   if (parsed.error) return deny('QR Code inválido ou adulterado (assinatura não confere).');
 
-  const pass = db.prepare('SELECT * FROM passes WHERE code = ?').get(parsed.code);
+  const { data: pass } = await supabaseAdmin.from('passes').select('*').eq('code', parsed.code).maybeSingle();
   if (!pass) return deny('Passe inexistente.');
 
   const state = passWindowState(pass);
@@ -257,45 +347,39 @@ app.post('/api/scan', async (req, res) => {
   if (state === 'expired') return deny('Passe fora do período de validade (expirado).', pass.id);
   if (state === 'not_yet') return deny('Passe ainda não está dentro do período de validade.', pass.id);
 
+  const { data: grantedLogs } = await supabaseAdmin
+    .from('access_logs').select('direction').eq('pass_id', pass.id).eq('result', 'granted').order('id', { ascending: false });
+  const logs = grantedLogs || [];
+
   // Direção automática: se o último movimento autorizado foi uma entrada,
   // esta leitura é uma saída — e vice-versa. O QR é o mesmo nos dois sentidos.
-  const lastMove = db.prepare(`
-    SELECT direction FROM access_logs
-    WHERE pass_id = ? AND result = 'granted'
-    ORDER BY id DESC LIMIT 1
-  `).get(pass.id);
-  if (!dir) dir = lastMove && lastMove.direction === 'in' ? 'out' : 'in';
+  if (!dir) dir = logs[0] && logs[0].direction === 'in' ? 'out' : 'in';
 
   // Regras de utilização:
   //  - visitante: o passe vale exatamente 1 entrada e 1 saída
   //  - colaborador: utilizações ilimitadas durante o período de validade
   if (pass.type === 'visitor') {
-    const used = db.prepare(`
-      SELECT
-        COALESCE(SUM(CASE WHEN direction = 'in'  THEN 1 ELSE 0 END), 0) AS ins,
-        COALESCE(SUM(CASE WHEN direction = 'out' THEN 1 ELSE 0 END), 0) AS outs
-      FROM access_logs WHERE pass_id = ? AND result = 'granted'
-    `).get(pass.id);
-    if (dir === 'in' && used.ins >= 1) return deny('Passe de visitante já utilizado: a entrada única já foi consumida.', pass.id);
-    if (dir === 'out' && used.outs >= 1) return deny('Passe de visitante já utilizado: a saída única já foi consumida.', pass.id);
-    if (dir === 'out' && used.ins === 0) return deny('Saída negada: este passe de visitante não tem entrada registada.', pass.id);
+    const ins = logs.filter(l => l.direction === 'in').length;
+    const outs = logs.filter(l => l.direction === 'out').length;
+    if (dir === 'in' && ins >= 1) return deny('Passe de visitante já utilizado: a entrada única já foi consumida.', pass.id);
+    if (dir === 'out' && outs >= 1) return deny('Passe de visitante já utilizado: a saída única já foi consumida.', pass.id);
+    if (dir === 'out' && ins === 0) return deny('Saída negada: este passe de visitante não tem entrada registada.', pass.id);
   }
 
   let holder, detail, docInfo = null;
   if (pass.type === 'employee') {
-    const e = db.prepare('SELECT name, department, active FROM employees WHERE id = ?').get(pass.employee_id);
+    const { data: e } = await supabaseAdmin.from('employees').select('name, department, active').eq('id', pass.employee_id).maybeSingle();
     if (!e || !e.active) return deny('Colaborador inativo.', pass.id);
     holder = e.name;
     detail = `Colaborador — ${e.department || 's/ departamento'}`;
   } else {
-    const v = db.prepare(`
-      SELECT v.name, v.company, v.document_type, v.document_number, v.document_image,
-             e.name AS host_name
-      FROM visitors v
-      JOIN employees e ON e.id = v.host_id WHERE v.id = ?
-    `).get(pass.visitor_id);
+    const { data: v } = await supabaseAdmin
+      .from('visitors')
+      .select('name, company, document_type, document_number, document_image, host:employees!visitors_host_id_fkey ( name )')
+      .eq('id', pass.visitor_id)
+      .maybeSingle();
     holder = v ? v.name : 'Visitante';
-    detail = v ? `Visitante${v.company ? ' — ' + v.company : ''} · Anfitrião: ${v.host_name}` : 'Visitante';
+    detail = v ? `Visitante${v.company ? ' — ' + v.company : ''} · Anfitrião: ${v.host.name}` : 'Visitante';
     if (v) {
       docInfo = {
         type: v.document_type,
@@ -305,8 +389,7 @@ app.post('/api/scan', async (req, res) => {
     }
   }
 
-  db.prepare(`INSERT INTO access_logs (pass_id, direction, result, reason, gate) VALUES (?, ?, 'granted', '', ?)`)
-    .run(pass.id, dir, gateName);
+  await supabaseAdmin.from('access_logs').insert({ pass_id: pass.id, direction: dir, result: 'granted', reason: '', gate: gateName });
 
   res.json({
     result: 'granted',
@@ -320,107 +403,163 @@ app.post('/api/scan', async (req, res) => {
   });
 });
 
-app.get('/api/scan/recent', (req, res) => {
-  const rows = db.prepare(`
-    SELECT l.id, l.direction, l.result, l.reason, l.gate, l.created_at,
-           COALESCE(e.name, v.name, '—') AS holder, p.type
-    FROM access_logs l
-    LEFT JOIN passes p ON p.id = l.pass_id
-    LEFT JOIN employees e ON e.id = p.employee_id
-    LEFT JOIN visitors v ON v.id = p.visitor_id
-    ORDER BY l.id DESC LIMIT 15
-  `).all();
-  res.json(rows);
+function mapLogRow(l) {
+  const p = l.pass;
+  return {
+    id: l.id, direction: l.direction, result: l.result, reason: l.reason, gate: l.gate, created_at: l.created_at,
+    holder: (p && (p.employee?.name || p.visitor?.name)) || '—',
+    type: p ? p.type : null,
+  };
+}
+
+app.get('/api/scan/recent', async (req, res) => {
+  const { data: rows, error } = await supabaseAdmin
+    .from('access_logs')
+    .select(`
+      id, direction, result, reason, gate, created_at,
+      pass:passes!access_logs_pass_id_fkey (
+        type,
+        employee:employees!passes_employee_id_fkey ( name ),
+        visitor:visitors!passes_visitor_id_fkey ( name )
+      )
+    `)
+    .order('id', { ascending: false })
+    .limit(15);
+  if (error) return res.status(500).json({ error: 'Erro ao obter registos.' });
+  res.json(rows.map(mapLogRow));
 });
 
 // ---------------------------------------------------------------------------
 // Administração
 // ---------------------------------------------------------------------------
-app.get('/api/admin/stats', requireAdmin, (req, res) => {
-  const today = new Date().toISOString().slice(0, 10);
-  res.json({
-    employees: db.prepare('SELECT COUNT(*) c FROM employees WHERE active = 1').get().c,
-    active_passes: db.prepare(`SELECT COUNT(*) c FROM passes WHERE status = 'active' AND valid_until > ?`).get(nowISO()).c,
-    visitors_today: db.prepare(`SELECT COUNT(*) c FROM visitors WHERE date(created_at) = ?`).get(today).c,
-    accesses_today: db.prepare(`SELECT COUNT(*) c FROM access_logs WHERE date(created_at) = ? AND result = 'granted'`).get(today).c,
-    denied_today: db.prepare(`SELECT COUNT(*) c FROM access_logs WHERE date(created_at) = ? AND result = 'denied'`).get(today).c,
-  });
+app.get('/api/admin/stats', requireAdmin, async (req, res) => {
+  const { start, end } = todayBounds();
+  const count = async (query) => {
+    const { count, error } = await query;
+    if (error) throw error;
+    return count || 0;
+  };
+  try {
+    const [employees, active_passes, visitors_today, accesses_today, denied_today] = await Promise.all([
+      count(supabaseAdmin.from('employees').select('*', { count: 'exact', head: true }).eq('active', true)),
+      count(supabaseAdmin.from('passes').select('*', { count: 'exact', head: true }).eq('status', 'active').gt('valid_until', nowISO())),
+      count(supabaseAdmin.from('visitors').select('*', { count: 'exact', head: true }).gte('created_at', start).lt('created_at', end)),
+      count(supabaseAdmin.from('access_logs').select('*', { count: 'exact', head: true }).eq('result', 'granted').gte('created_at', start).lt('created_at', end)),
+      count(supabaseAdmin.from('access_logs').select('*', { count: 'exact', head: true }).eq('result', 'denied').gte('created_at', start).lt('created_at', end)),
+    ]);
+    res.json({ employees, active_passes, visitors_today, accesses_today, denied_today });
+  } catch {
+    res.status(500).json({ error: 'Erro ao obter estatísticas.' });
+  }
 });
 
-app.get('/api/admin/employees', requireAdmin, (req, res) => {
-  res.json(db.prepare('SELECT id, name, email, department, role, active, created_at FROM employees ORDER BY name').all());
+app.get('/api/admin/employees', requireAdmin, async (req, res) => {
+  const { data: rows, error } = await supabaseAdmin
+    .from('employees').select('id, name, email, department, role, active, created_at').order('name');
+  if (error) return res.status(500).json({ error: 'Erro ao obter colaboradores.' });
+  res.json(rows);
 });
 
-app.post('/api/admin/employees', requireAdmin, (req, res) => {
+app.post('/api/admin/employees', requireAdmin, async (req, res) => {
   const { name, email, password, department, role } = req.body || {};
   if (!String(name || '').trim() || !String(email || '').trim() || !String(password || '')) {
     return res.status(400).json({ error: 'Nome, e-mail e palavra-passe são obrigatórios.' });
   }
-  try {
-    const info = db.prepare(`
-      INSERT INTO employees (name, email, password_hash, department, role)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(
-      String(name).trim(),
-      String(email).trim().toLowerCase(),
-      sec.hashPassword(String(password)),
-      String(department || '').trim(),
-      role === 'admin' ? 'admin' : 'employee'
-    );
-    res.json({ id: Number(info.lastInsertRowid) });
-  } catch (e) {
-    res.status(400).json({ error: 'E-mail já registado.' });
+  const emailNorm = String(email).trim().toLowerCase();
+
+  const { data: created, error: authErr } = await supabaseAdmin.auth.admin.createUser({
+    email: emailNorm,
+    password: String(password),
+    email_confirm: true,
+  });
+  if (authErr || !created.user) return res.status(400).json({ error: 'E-mail já registado.' });
+
+  const { error: dbErr } = await supabaseAdmin.from('employees').insert({
+    id: created.user.id,
+    name: String(name).trim(),
+    email: emailNorm,
+    department: String(department || '').trim(),
+    role: role === 'admin' ? 'admin' : 'employee',
+  });
+  if (dbErr) {
+    await supabaseAdmin.auth.admin.deleteUser(created.user.id).catch(() => {});
+    return res.status(400).json({ error: 'Erro ao criar colaborador.' });
   }
+  res.json({ id: created.user.id });
 });
 
-app.post('/api/admin/employees/:id/toggle', requireAdmin, (req, res) => {
-  const id = Number(req.params.id);
+app.post('/api/admin/employees/:id/toggle', requireAdmin, async (req, res) => {
+  const id = req.params.id;
   if (id === req.user.id) return res.status(400).json({ error: 'Não pode desativar a sua própria conta.' });
-  db.prepare('UPDATE employees SET active = 1 - active WHERE id = ?').run(id);
+  const { data: emp } = await supabaseAdmin.from('employees').select('active').eq('id', id).maybeSingle();
+  if (!emp) return res.status(404).json({ error: 'Colaborador não encontrado.' });
+  await supabaseAdmin.from('employees').update({ active: !emp.active }).eq('id', id);
   res.json({ ok: true });
 });
 
-app.get('/api/admin/passes', requireAdmin, (req, res) => {
-  const rows = db.prepare(`
-    SELECT p.id, p.type, p.purpose, p.valid_from, p.valid_until, p.status, p.created_at,
-           COALESCE(e.name, v.name) AS holder,
-           h.name AS host_name,
-           v.id AS visitor_id,
-           v.document_type, v.document_number,
-           CASE WHEN v.document_image IS NOT NULL THEN 1 ELSE 0 END AS has_doc,
-           (SELECT COUNT(*) FROM access_logs l WHERE l.pass_id = p.id AND l.direction = 'out' AND l.result = 'granted') AS outs
-    FROM passes p
-    LEFT JOIN employees e ON e.id = p.employee_id
-    LEFT JOIN visitors v ON v.id = p.visitor_id
-    LEFT JOIN employees h ON h.id = v.host_id
-    ORDER BY p.created_at DESC LIMIT 200
-  `).all();
-  res.json(rows.map(r => ({ ...r, state: r.type === 'visitor' && r.outs >= 1 ? 'used' : passWindowState(r) })));
+app.get('/api/admin/passes', requireAdmin, async (req, res) => {
+  const { data: rows, error } = await supabaseAdmin
+    .from('passes')
+    .select(`
+      id, type, purpose, valid_from, valid_until, status, created_at,
+      employee:employees!passes_employee_id_fkey ( name ),
+      visitor:visitors!passes_visitor_id_fkey (
+        id, name, document_type, document_number, document_image,
+        host:employees!visitors_host_id_fkey ( name )
+      ),
+      access_logs ( direction, result )
+    `)
+    .order('created_at', { ascending: false })
+    .limit(200);
+  if (error) return res.status(500).json({ error: 'Erro ao obter passes.' });
+
+  res.json(rows.map(p => {
+    const outs = p.access_logs.filter(l => l.direction === 'out' && l.result === 'granted').length;
+    return {
+      id: p.id, type: p.type, purpose: p.purpose, valid_from: p.valid_from, valid_until: p.valid_until,
+      status: p.status, created_at: p.created_at,
+      holder: p.employee?.name || p.visitor?.name || null,
+      host_name: p.visitor?.host?.name || null,
+      visitor_id: p.visitor?.id ?? null,
+      document_type: p.visitor?.document_type ?? null,
+      document_number: p.visitor?.document_number ?? null,
+      has_doc: !!p.visitor?.document_image,
+      state: p.type === 'visitor' && outs >= 1 ? 'used' : passWindowState(p),
+    };
+  }));
 });
 
-app.post('/api/admin/passes/:id/revoke', requireAdmin, (req, res) => {
-  db.prepare(`UPDATE passes SET status = 'revoked' WHERE id = ?`).run(Number(req.params.id));
+app.post('/api/admin/passes/:id/revoke', requireAdmin, async (req, res) => {
+  await supabaseAdmin.from('passes').update({ status: 'revoked' }).eq('id', Number(req.params.id));
   res.json({ ok: true });
 });
 
-app.get('/api/admin/logs', requireAdmin, (req, res) => {
-  const rows = db.prepare(`
-    SELECT l.id, l.direction, l.result, l.reason, l.gate, l.created_at, p.type,
-           COALESCE(e.name, v.name, '—') AS holder
-    FROM access_logs l
-    LEFT JOIN passes p ON p.id = l.pass_id
-    LEFT JOIN employees e ON e.id = p.employee_id
-    LEFT JOIN visitors v ON v.id = p.visitor_id
-    ORDER BY l.id DESC LIMIT 300
-  `).all();
-  res.json(rows);
+app.get('/api/admin/logs', requireAdmin, async (req, res) => {
+  const { data: rows, error } = await supabaseAdmin
+    .from('access_logs')
+    .select(`
+      id, direction, result, reason, gate, created_at,
+      pass:passes!access_logs_pass_id_fkey (
+        type,
+        employee:employees!passes_employee_id_fkey ( name ),
+        visitor:visitors!passes_visitor_id_fkey ( name )
+      )
+    `)
+    .order('id', { ascending: false })
+    .limit(300);
+  if (error) return res.status(500).json({ error: 'Erro ao obter registos.' });
+  res.json(rows.map(mapLogRow));
 });
 
 // ---------------------------------------------------------------------------
-app.listen(PORT, () => {
-  console.log(`\n  Plataforma de Controlo de Acesso a correr em http://localhost:${PORT}\n`);
-  console.log('  Portal do Colaborador : http://localhost:' + PORT + '/portal.html');
-  console.log('  Totem do Visitante    : http://localhost:' + PORT + '/totem.html');
-  console.log('  Scanner da Portaria   : http://localhost:' + PORT + '/scanner.html');
-  console.log('  Administração         : http://localhost:' + PORT + '/admin.html\n');
-});
+ensureDocsBucket()
+  .catch(e => console.error('Aviso: não foi possível preparar o bucket de Storage:', e.message))
+  .finally(() => {
+    app.listen(PORT, () => {
+      console.log(`\n  Plataforma de Controlo de Acesso a correr em http://localhost:${PORT}\n`);
+      console.log('  Portal do Colaborador : http://localhost:' + PORT + '/portal.html');
+      console.log('  Totem do Visitante    : http://localhost:' + PORT + '/totem.html');
+      console.log('  Scanner da Portaria   : http://localhost:' + PORT + '/scanner.html');
+      console.log('  Administração         : http://localhost:' + PORT + '/admin.html\n');
+    });
+  });
