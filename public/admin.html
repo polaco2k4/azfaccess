@@ -33,6 +33,7 @@
   <div class="layout">
     <nav class="sidebar">
       <button class="active" data-tab="dashboard">🏠 Dashboard</button>
+      <button data-tab="inside">🏢 Quem está no edifício</button>
       <button data-tab="logs">📜 Registo de acessos</button>
       <button data-tab="passes">🎫 Passes</button>
       <button data-tab="employees">👥 Colaboradores</button>
@@ -66,6 +67,17 @@
   </div>
 
   <!-- Logs -->
+  <!-- Quem está no edifício -->
+  <div class="card tab-pane" id="tab-inside" style="display:none">
+    <h2>Quem está no edifício</h2>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Nome</th><th>Tipo</th><th>Departamento / Empresa</th><th>Entrada</th><th>Permanência</th></tr></thead>
+        <tbody id="inside-body"></tbody>
+      </table>
+    </div>
+  </div>
+
   <div class="card tab-pane" id="tab-logs" style="display:none">
     <h2>Registo de acessos (mais recentes primeiro)</h2>
     <div class="table-scroll">
@@ -265,9 +277,10 @@ function enterDash() {
   initReportFilters();
   loadAll();
   setInterval(loadStats, 15000);
+  setInterval(loadInside, 15000);
 }
 
-function loadAll() { loadStats(); loadLogs(); loadPasses(); loadEmployees(); loadVisitors(); loadReports(); loadDashboard(); }
+function loadAll() { loadStats(); loadLogs(); loadPasses(); loadEmployees(); loadVisitors(); loadReports(); loadDashboard(); loadInside(); }
 
 // ------------------------- tabs -------------------------
 $all('.sidebar button').forEach(b => b.onclick = () => {
@@ -413,6 +426,19 @@ async function loadVisitors() {
         ${v.has_doc ? `<button class="btn-sm btn-ghost" onclick="viewDoc(${v.id}, '${esc(v.name)}')">📄 Documento</button>` : ''}
         ${(v.state === 'inside' || v.state === 'pending') && v.pass_id ? `<button class="btn-sm btn-danger" onclick="revokePass(${v.pass_id})">Revogar</button>` : ''}</td>
     </tr>`).join('') : '<tr><td colspan="9" class="muted">Sem visitantes registados.</td></tr>';
+}
+
+// ------------------------- quem está no edifício -------------------------
+async function loadInside() {
+  const rows = await api('/api/admin/inside');
+  $('#inside-body').innerHTML = rows.length ? rows.map(p => `
+    <tr>
+      <td>${esc(p.name)}</td>
+      <td>${p.type === 'employee' ? 'Colaborador' : 'Visitante'}</td>
+      <td>${esc(p.detail || '—')}</td>
+      <td>${fmtDate(p.entered_at)}</td>
+      <td>${fmtDuration((Date.now() - new Date(p.entered_at)) / 60000)}</td>
+    </tr>`).join('') : '<tr><td colspan="5" class="muted">Não há ninguém no edifício neste momento.</td></tr>';
 }
 
 // ------------------------- colaboradores -------------------------

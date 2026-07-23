@@ -469,6 +469,38 @@ app.get('/api/admin/stats', requireAdmin, async (req, res) => {
   }
 });
 
+app.get('/api/admin/inside', requireAdmin, async (req, res) => {
+  const { data, error } = await supabaseAdmin
+    .from('access_logs')
+    .select(`
+      pass_id, direction, created_at,
+      pass:passes!access_logs_pass_id_fkey (
+        type,
+        employee:employees!passes_employee_id_fkey ( name, department ),
+        visitor:visitors!passes_visitor_id_fkey ( name, company )
+      )
+    `)
+    .eq('result', 'granted')
+    .order('created_at', { ascending: true });
+  if (error) return res.status(500).json({ error: 'Erro ao obter ocupação.' });
+
+  const last = new Map();
+  for (const log of data) last.set(log.pass_id, log);
+
+  const inside = [...last.values()]
+    .filter(l => l.direction === 'in')
+    .map(l => ({
+      pass_id: l.pass_id,
+      type: l.pass?.type ?? null,
+      name: l.pass?.employee?.name || l.pass?.visitor?.name || '—',
+      detail: l.pass?.employee?.department || l.pass?.visitor?.company || null,
+      entered_at: l.created_at,
+    }))
+    .sort((a, b) => b.entered_at.localeCompare(a.entered_at));
+
+  res.json(inside);
+});
+
 app.get('/api/admin/employees', requireAdmin, async (req, res) => {
   const { data: rows, error } = await supabaseAdmin
     .from('employees').select('id, name, email, department, role, active, created_at').order('name');

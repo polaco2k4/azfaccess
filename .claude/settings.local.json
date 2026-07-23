@@ -94,7 +94,19 @@
       "Bash(node -e \"const d=new Date\\(\\);d.setDate\\(d.getDate\\(\\)-6\\);console.log\\(d.toISOString\\(\\).slice\\(0,10\\)\\)\")",
       "Bash(node -e \"console.log\\(new Date\\(\\).toISOString\\(\\).slice\\(0,10\\)\\)\")",
       "Bash(curl -s -b /tmp/cookies.txt 'http://localhost:3000/api/admin/reports?from=__TRACKED_VAR__&to=__TRACKED_VAR__')",
-      "Bash(git check-ignore *)"
+      "Bash(git check-ignore *)",
+      "Bash(git fetch *)",
+      "Bash(curl -s -o /dev/null -w \"vendor/chart.js: %{http_code}\\\\n\" https://azfaccess.vercel.app/vendor/chart.js)",
+      "Bash(rm -f /tmp/stats_cookies.txt)",
+      "Bash(curl -s -c /tmp/stats_cookies.txt -X POST http://localhost:3033/api/auth/login -H \"Content-Type: application/json\" -d '{\"email\":\"admin@empresa.com\",\"password\":\"admin123\"}')",
+      "Bash(curl -s -b /tmp/stats_cookies.txt http://localhost:3033/api/admin/stats)",
+      "Bash(taskkill //F //PID 16828)",
+      "Bash(curl -s -o /dev/null -w \"admin.html: %{http_code}\\\\n\" https://azfaccess.vercel.app/admin.html)",
+      "Bash(rm -f /tmp/inside_cookies.txt)",
+      "Bash(curl -s -c /tmp/inside_cookies.txt -X POST http://localhost:3034/api/auth/login -H \"Content-Type: application/json\" -d '{\"email\":\"admin@empresa.com\",\"password\":\"admin123\"}')",
+      "Bash(curl -s -b /tmp/inside_cookies.txt http://localhost:3034/api/admin/inside)",
+      "Bash(curl -s -b /tmp/inside_cookies.txt http://localhost:3034/api/admin/stats)",
+      "Bash(taskkill //F //PID 17908)"
     ]
   }
 }
