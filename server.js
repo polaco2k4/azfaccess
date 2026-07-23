@@ -435,6 +435,18 @@ app.get('/api/scan/recent', async (req, res) => {
 // ---------------------------------------------------------------------------
 // Administração
 // ---------------------------------------------------------------------------
+async function countInsideNow() {
+  const { data, error } = await supabaseAdmin
+    .from('access_logs')
+    .select('pass_id, direction')
+    .eq('result', 'granted')
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  const lastDirection = new Map();
+  for (const log of data) lastDirection.set(log.pass_id, log.direction);
+  return [...lastDirection.values()].filter(d => d === 'in').length;
+}
+
 app.get('/api/admin/stats', requireAdmin, async (req, res) => {
   const { start, end } = todayBounds();
   const count = async (query) => {
@@ -443,14 +455,15 @@ app.get('/api/admin/stats', requireAdmin, async (req, res) => {
     return count || 0;
   };
   try {
-    const [employees, active_passes, visitors_today, accesses_today, denied_today] = await Promise.all([
+    const [employees, active_passes, visitors_today, accesses_today, denied_today, inside_now] = await Promise.all([
       count(supabaseAdmin.from('employees').select('*', { count: 'exact', head: true }).eq('active', true)),
       count(supabaseAdmin.from('passes').select('*', { count: 'exact', head: true }).eq('status', 'active').gt('valid_until', nowISO())),
       count(supabaseAdmin.from('visitors').select('*', { count: 'exact', head: true }).gte('created_at', start).lt('created_at', end)),
       count(supabaseAdmin.from('access_logs').select('*', { count: 'exact', head: true }).eq('result', 'granted').gte('created_at', start).lt('created_at', end)),
       count(supabaseAdmin.from('access_logs').select('*', { count: 'exact', head: true }).eq('result', 'denied').gte('created_at', start).lt('created_at', end)),
+      countInsideNow(),
     ]);
-    res.json({ employees, active_passes, visitors_today, accesses_today, denied_today });
+    res.json({ employees, active_passes, visitors_today, accesses_today, denied_today, inside_now });
   } catch {
     res.status(500).json({ error: 'Erro ao obter estatísticas.' });
   }

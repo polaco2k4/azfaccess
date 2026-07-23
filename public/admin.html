@@ -341,6 +341,7 @@ async function loadStats() {
   $('#stats').innerHTML = `
     <div class="stat"><div class="n">${s.employees}</div><div class="l">Colaboradores ativos</div></div>
     <div class="stat"><div class="n">${s.active_passes}</div><div class="l">Passes válidos neste momento</div></div>
+    <div class="stat"><div class="n" style="color:var(--accent)">${s.inside_now}</div><div class="l">Pessoas no edifício</div></div>
     <div class="stat"><div class="n">${s.visitors_today}</div><div class="l">Visitantes registados hoje</div></div>
     <div class="stat"><div class="n" style="color:var(--ok)">${s.accesses_today}</div><div class="l">Acessos autorizados hoje</div></div>
     <div class="stat"><div class="n" style="color:var(--bad)">${s.denied_today}</div><div class="l">Tentativas negadas hoje</div></div>`;
