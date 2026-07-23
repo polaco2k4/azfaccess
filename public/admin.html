@@ -24,7 +24,6 @@
     <label>Palavra-passe</label>
     <input id="login-pass" type="password" autocomplete="current-password">
     <div class="mt"><button id="btn-login" style="width:100%">Entrar</button></div>
-    <p class="muted mt">Demonstração: <b>admin@empresa.com</b> / <b>admin123</b></p>
   </div>
 </div>
 
@@ -72,7 +71,7 @@
     <h2>Quem está no edifício</h2>
     <div class="table-scroll">
       <table>
-        <thead><tr><th>Nome</th><th>Tipo</th><th>Departamento / Empresa</th><th>Entrada</th><th>Permanência</th></tr></thead>
+        <thead><tr><th>Nome</th><th>Tipo</th><th>Departamento / Empresa</th><th>Entrada</th><th>Permanência</th><th></th></tr></thead>
         <tbody id="inside-body"></tbody>
       </table>
     </div>
@@ -438,7 +437,16 @@ async function loadInside() {
       <td>${esc(p.detail || '—')}</td>
       <td>${fmtDate(p.entered_at)}</td>
       <td>${fmtDuration((Date.now() - new Date(p.entered_at)) / 60000)}</td>
-    </tr>`).join('') : '<tr><td colspan="5" class="muted">Não há ninguém no edifício neste momento.</td></tr>';
+      <td class="row" style="justify-content:flex-end">
+        <button class="btn-sm btn-danger" onclick="forceExit(${p.pass_id}, '${esc(p.name)}')">Forçar saída</button>
+      </td>
+    </tr>`).join('') : '<tr><td colspan="6" class="muted">Não há ninguém no edifício neste momento.</td></tr>';
+}
+
+async function forceExit(passId, name) {
+  if (!confirm(`Registar a saída de ${name}?`)) return;
+  await api(`/api/admin/inside/${passId}/exit`, { method: 'POST' });
+  loadInside(); loadStats(); loadVisitors();
 }
 
 // ------------------------- colaboradores -------------------------
@@ -451,13 +459,27 @@ async function loadEmployees() {
       <td>${esc(e.department || '—')}</td>
       <td>${e.role === 'admin' ? '<span class="badge warn">Admin</span>' : 'Colaborador'}</td>
       <td>${e.active ? '<span class="badge ok">Ativo</span>' : '<span class="badge bad">Inativo</span>'}</td>
-      <td>${e.id !== me.id ? `<button class="btn-sm btn-ghost" onclick="toggleEmp('${e.id}')">${e.active ? 'Desativar' : 'Reativar'}</button>` : '<span class="muted">(a sua conta)</span>'}</td>
+      <td class="row" style="justify-content:flex-end">
+        ${e.id !== me.id ? `<button class="btn-sm btn-ghost" onclick="toggleEmp('${e.id}')">${e.active ? 'Desativar' : 'Reativar'}</button>` : '<span class="muted">(a sua conta)</span>'}
+        <button class="btn-sm btn-ghost" onclick="resetEmpPassword('${e.id}', '${esc(e.name)}')">Redefinir password</button>
+      </td>
     </tr>`).join('');
 }
 
 async function toggleEmp(id) {
   await api(`/api/admin/employees/${id}/toggle`, { method: 'POST' });
   loadEmployees(); loadStats();
+}
+
+async function resetEmpPassword(id, name) {
+  const pass = prompt(`Nova palavra-passe para ${name} (mínimo 6 caracteres):`);
+  if (!pass) return;
+  try {
+    await api(`/api/admin/employees/${id}/reset-password`, { method: 'POST', body: { password: pass } });
+    alert('Palavra-passe redefinida com sucesso.');
+  } catch (e) {
+    alert(e.message);
+  }
 }
 
 $('#btn-new-emp').onclick = () => {

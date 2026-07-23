@@ -501,6 +501,21 @@ app.get('/api/admin/inside', requireAdmin, async (req, res) => {
   res.json(inside);
 });
 
+app.post('/api/admin/inside/:passId/exit', requireAdmin, async (req, res) => {
+  const passId = Number(req.params.passId);
+  const { data: last } = await supabaseAdmin
+    .from('access_logs')
+    .select('direction')
+    .eq('pass_id', passId)
+    .eq('result', 'granted')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!last || last.direction !== 'in') return res.status(400).json({ error: 'Este passe não está atualmente dentro do edifício.' });
+  await supabaseAdmin.from('access_logs').insert({ pass_id: passId, direction: 'out', result: 'granted', reason: 'Saída forçada pelo administrador.', gate: 'Painel de administração' });
+  res.json({ ok: true });
+});
+
 app.get('/api/admin/employees', requireAdmin, async (req, res) => {
   const { data: rows, error } = await supabaseAdmin
     .from('employees').select('id, name, email, department, role, active, created_at').order('name');
@@ -542,6 +557,16 @@ app.post('/api/admin/employees/:id/toggle', requireAdmin, async (req, res) => {
   const { data: emp } = await supabaseAdmin.from('employees').select('active').eq('id', id).maybeSingle();
   if (!emp) return res.status(404).json({ error: 'Colaborador não encontrado.' });
   await supabaseAdmin.from('employees').update({ active: !emp.active }).eq('id', id);
+  res.json({ ok: true });
+});
+
+app.post('/api/admin/employees/:id/reset-password', requireAdmin, async (req, res) => {
+  const { password } = req.body || {};
+  if (String(password || '').length < 6) {
+    return res.status(400).json({ error: 'A nova palavra-passe deve ter pelo menos 6 caracteres.' });
+  }
+  const { error } = await supabaseAdmin.auth.admin.updateUserById(req.params.id, { password: String(password) });
+  if (error) return res.status(400).json({ error: 'Erro ao redefinir a palavra-passe.' });
   res.json({ ok: true });
 });
 

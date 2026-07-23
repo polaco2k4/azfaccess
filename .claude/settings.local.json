@@ -106,7 +106,22 @@
       "Bash(curl -s -c /tmp/inside_cookies.txt -X POST http://localhost:3034/api/auth/login -H \"Content-Type: application/json\" -d '{\"email\":\"admin@empresa.com\",\"password\":\"admin123\"}')",
       "Bash(curl -s -b /tmp/inside_cookies.txt http://localhost:3034/api/admin/inside)",
       "Bash(curl -s -b /tmp/inside_cookies.txt http://localhost:3034/api/admin/stats)",
-      "Bash(taskkill //F //PID 17908)"
+      "Bash(taskkill //F //PID 17908)",
+      "Bash(powershell -NoProfile -Command \"Get-CimInstance Win32_Process -Filter \\\\\"ProcessId=10896\\\\\" | Select-Object ProcessId,Name,CommandLine | Format-List\")",
+      "Bash(taskkill //F //PID 10896)",
+      "Bash(rm -f /tmp/fe_cookies.txt)",
+      "Bash(curl -s -c /tmp/fe_cookies.txt -X POST http://localhost:3000/api/auth/login -H \"Content-Type: application/json\" -d '{\"email\":\"admin@empresa.com\",\"password\":\"admin123\"}')",
+      "Bash(curl -s -b /tmp/fe_cookies.txt http://localhost:3000/api/admin/inside)",
+      "Bash(curl -s -b /tmp/fe_cookies.txt -X POST http://localhost:3000/api/admin/inside/14/exit)",
+      "Bash(curl -s -w \"\\\\nstatus:%{http_code}\\\\n\" -b /tmp/fe_cookies.txt -X POST http://localhost:3000/api/admin/inside/14/exit)",
+      "Bash(rm -f /tmp/rp_cookies.txt)",
+      "Bash(curl -s -c /tmp/rp_cookies.txt -X POST http://localhost:3000/api/auth/login -H \"Content-Type: application/json\" -d '{\"email\":\"admin@empresa.com\",\"password\":\"admin123\"}')",
+      "Bash(curl -s -b /tmp/rp_cookies.txt http://localhost:3000/api/admin/employees)",
+      "Bash(curl -s -w \"\\\\nstatus:%{http_code}\\\\n\" -b /tmp/rp_cookies.txt -X POST http://localhost:3000/api/admin/employees/1983a387-ec54-4281-9b5c-514d96e23c87/reset-password -H \"Content-Type: application/json\" -d '{\"password\":\"123\"}')",
+      "Bash(curl -s -w \"\\\\nstatus:%{http_code}\\\\n\" -b /tmp/rp_cookies.txt -X POST http://localhost:3000/api/admin/employees/1983a387-ec54-4281-9b5c-514d96e23c87/reset-password -H \"Content-Type: application/json\" -d '{\"password\":\"tempTest456\"}')",
+      "Bash(curl -s -w \"\\\\nstatus:%{http_code}\\\\n\" -X POST http://localhost:3000/api/auth/login -H \"Content-Type: application/json\" -d '{\"email\":\"ana@empresa.com\",\"password\":\"tempTest456\"}')",
+      "Bash(curl -s -w \"\\\\nstatus:%{http_code}\\\\n\" -b /tmp/rp_cookies.txt -X POST http://localhost:3000/api/admin/employees/1983a387-ec54-4281-9b5c-514d96e23c87/reset-password -H \"Content-Type: application/json\" -d '{\"password\":\"ana123\"}')",
+      "Bash(curl -s -w \"\\\\nstatus:%{http_code}\\\\n\" -X POST http://localhost:3000/api/auth/login -H \"Content-Type: application/json\" -d '{\"email\":\"ana@empresa.com\",\"password\":\"ana123\"}')"
     ]
   }
 }
